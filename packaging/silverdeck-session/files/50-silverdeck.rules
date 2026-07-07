@@ -1,0 +1,25 @@
+// SilverDeck console policy: the seated `deck` user may install/remove
+// store flatpaks and trigger the atomic OS update — nothing else.
+polkit.addRule(function (action, subject) {
+    if (subject.user != "deck" || !subject.local || !subject.active) {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "silverdeck-update.service" &&
+        action.lookup("verb") == "start") {
+        return polkit.Result.YES;
+    }
+
+    if (action.id == "org.freedesktop.Flatpak.app-install" ||
+        action.id == "org.freedesktop.Flatpak.runtime-install" ||
+        action.id == "org.freedesktop.Flatpak.app-uninstall" ||
+        action.id == "org.freedesktop.Flatpak.runtime-uninstall" ||
+        action.id == "org.freedesktop.Flatpak.metadata-update" ||
+        action.id == "org.freedesktop.Flatpak.appstream-update" ||
+        action.id == "org.freedesktop.Flatpak.configure-remote") {
+        return polkit.Result.YES;
+    }
+
+    return polkit.Result.NOT_HANDLED;
+});

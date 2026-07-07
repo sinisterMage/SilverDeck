@@ -1,0 +1,110 @@
+---
+title: Arch Silverblue
+description: Atomic, transactional, auto-rolling-back system updates for a fully mutable Arch Linux.
+template: splash
+head:
+  - tag: title
+    content: Arch Silverblue — atomic updates for mutable Arch Linux
+hero:
+  tagline: Atomic updates. Automatic rollback. Still your fully writable Arch.
+  actions:
+    - text: Get Started
+      link: /getting-started/
+      icon: right-arrow
+    - text: Download ISO
+      link: https://github.com/sinisterMage/Arch-silverblue/releases/latest
+      icon: download
+      variant: minimal
+    - text: How it works
+      link: /architecture/update-flow/
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/sinisterMage/Arch-silverblue
+      icon: github
+      variant: minimal
+---
+
+import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
+
+```bash
+silverblue-update            # snapshot the root, upgrade it, validate, boot it next
+                             #   → reboot → auto-marked good, or auto-rolled-back on failure
+silverblue-update --rollback # boot the previous snapshot on next reboot
+silverblue-update --dry-run  # show the plan without changing anything
+```
+
+## Why Arch Silverblue
+
+<CardGrid>
+	<Card title="Atomic by snapshot" icon="rocket">
+		Every update builds a brand-new root in a Btrfs copy-on-write snapshot. The
+		running system is never touched mid-update, and a failed upgrade leaves no
+		partial state behind — the half-built snapshot is simply discarded.
+	</Card>
+	<Card title="Rolls back by itself" icon="approve-check">
+		Three independent safety nets: a failed post-boot health check triggers an
+		`OnFailure` rollback, a hung userspace is reset by a hardware watchdog, and
+		an unbootable kernel is demoted by systemd-boot boot counting.
+	</Card>
+	<Card title="Fully mutable" icon="pencil">
+		Unlike Fedora Silverblue, there is no read-only `/usr`, no overlayfs, no
+		immutable root. It stays plain, writable Arch — atomicity comes purely from
+		snapshots, not from locking you out of your own system.
+	</Card>
+	<Card title="Pure pacman, stock Arch" icon="puzzle">
+		No custom package format, no pacman wrapper, no patched bootloader, no
+		signing scheme. The update is a normal `pacman -Syu` — it just runs inside
+		the snapshot instead of your live root.
+	</Card>
+	<Card title="systemd-boot and GRUB" icon="setting">
+		Both bootloaders are supported and detected at runtime. systemd-boot is the
+		primary, CI-validated path; GRUB is fully implemented and covered by unit
+		tests.
+	</Card>
+	<Card title="Derivable and tested" icon="open-book">
+		Fork it into your own branded distro by editing one file
+		(`config/distro.conf`) and rebuilding. Everything is shellcheck-clean, unit
+		tested with bats, and integration tested end-to-end in QEMU.
+	</Card>
+</CardGrid>
+
+## How an update works
+
+<Steps>
+
+1. **Snapshot.** `btrfs subvolume snapshot` clones the running root — instant,
+   copy-on-write, and the live system is never modified.
+
+2. **Upgrade in the clone.** `arch-chroot` into the snapshot and run
+   `pacman -Syu`. Any failure discards the snapshot; no partial state is left.
+
+3. **Validate.** Require a kernel and initramfs in the new `/boot`, and a clean
+   `systemd-analyze verify` inside the new root.
+
+4. **Register a boot entry.** A new bootloader entry for the snapshot — with a
+   boot-counting suffix on systemd-boot, or a regenerated menu on GRUB.
+
+5. **Boot it once.** The new root becomes the *next* boot only; the permanent
+   default is unchanged until it proves itself.
+
+6. **Keep the fallback.** The previous root stays registered; at most three
+   snapshots are kept, pruned in lockstep with their kernels and entries.
+
+7. **Bless or roll back.** After reboot, a health check either promotes the new
+   root to permanent default — or the system falls back to the previous root,
+   automatically.
+
+</Steps>
+
+Read the full flow, the on-disk layout, and the rollback-trigger table in
+[Update & Rollback Flow](/architecture/update-flow/).
+
+:::caution[Project status]
+Arch Silverblue is a **young, experimental project**. ISOs (with `SHA256SUMS`)
+are published on [GitHub Releases](https://github.com/sinisterMage/Arch-silverblue/releases/latest)
+and include a **minimal plain-prompt installer** for real hardware — see
+[Install on Real Hardware](/guides/installing/). Expect rough edges; treat it
+as something to try, not yet something to rely on. If the approach interests
+you, star the project on
+[GitHub](https://github.com/sinisterMage/Arch-silverblue) and follow along.
+:::

@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+#
+# silverblue-install — minimal interactive installer for Arch Silverblue.
+#
+# Runs from the live ISO as root. Plain-prompt TUI: numbered menus and read prompts on the
+# console (works on a VT and over serial alike; no dialog/whiptail, no extra dependencies).
+# It asks everything upfront, shows a summary, requires typing ERASE, then performs the
+# install unattended and offers a reboot.
+#
+# The generic install steps live in install-lib.sh (shared with the QEMU test
+# autoinstaller). This frontend never installs test-only artifacts (no autologin drop-in,
+# no local test repo) and only ever runs when the user invokes it.
+#
+# PROMPT ORDER IS A CONTRACT: with SB_INSTALL_MARKERS=1 each prompt is preceded by a
+# 'SILVERBLUE-INSTALL-PROMPT key=<key>' marker, and tests/qemu/harness.py answers the
+# prompts in the order gather_answers() asks them. If you add, remove, or reorder prompts,
+# update phase_interactive_install() in harness.py to match.
+
+# Branding + install defaults for the distro this ISO was built as (fixed, id-independent
+# path; see iso/build.sh).
+DISTRO_CONF=${DISTRO_CONF:-/usr/local/share/distro/distro.conf}
+OSRELEASE_IN=${OSRELEASE_IN:-/usr/local/share/distro/os-release.in}
+# shellcheck source=../../config/distro.conf
+source "$DISTRO_CONF" || { echo "error: cannot load $DISTRO_CONF" >&2; exit 1; }
+
+SB_INSTALL_LIB=${SB_INSTALL_LIB:-/usr/local/lib/installer/install-lib.sh}
+# shellcheck source=install-lib.sh
+source "$SB_INSTALL_LIB" || { echo "error: cannot load $SB_INSTALL_LIB" >&2; exit 1; }
+
+usage() {
+    printf 'Usage: %s\n\nInteractive installer for %s. Run from the live ISO as root;\nit takes no arguments and prompts for everything it needs.\n' \
+        "${0##*/}" "$DISTRO_NAME" >&2
+}
+
+# --- Environment-dependent validators (the pure ones live in install-lib.sh) ---------------
+
+validate_timezone() { [[ -n "$1" && -f "/usr/share/zoneinfo/$1" ]]; }
+
+validate_locale() {
+    [[ -n "$1" ]] || return 1
+    # If the live ISO ships glibc's SUPPORTED list, check against it; otherwise accept.
+    [[ -f /usr/share/i18n/SUPPORTED ]] || return 0
+    cut -d' ' -f1 /usr/share/i18n/SUPPORTED | grep -qxF "$1"
+}
+
+# --- Steps ----------------------------------------------------------------------------------
+
+preflight() {
+    [[ $EUID -eq 0 ]] || die "must run as root"
+    [[ -d /sys/firmware/efi/efivars ]] \
+        || die "booted in BIOS mode; $DISTRO_NAME supports UEFI only"
+    local tool
+    for tool in pacstrap sgdisk mkfs.fat mkfs.btrfs btrfs genfstab arch-chroot blkid wipefs; do
+        command -v "$tool" >/dev/null 2>&1 || die "missing tool: $tool"
+    done
+    if "$FINDMNT" -no TARGET /mnt >/dev/null 2>&1; then
+        die "/mnt is already mounted; unmount it first (umount -R /mnt)"
+    fi
+    while ! check_network; do
+        err "no outbound network (pacstrap needs the Arch mirrors)"
+        log "bring networking up in another console (e.g. iwctl for Wi-Fi), then retry"
+        ask_yesno retry-network "Retry the network check?" y || die "aborted: no network"
+    done
+}
+
+# Print the disk backing the live medium (so it can be excluded), or nothing.
+live_medium_disk() {
+    local src pk
+    src=$("$FINDMNT" -no SOURCE /run/archiso/bootmnt 2>/dev/null) || return 0
+    [[ -n "$src" && -b "$src" ]] || return 0
+    pk=$("$LSBLK" -no PKNAME "$src" 2>/dev/null | head -n1) || true
+    if [[ -n "$pk" ]]; then
+        printf '/dev/%s\n' "$pk"
+    else
+        printf '%s\n' "$src"
+    fi
+}
+
+# Numbered disk menu; prints the chosen /dev path.
+select_disk() {
+    local live listing line path size model choice
+    local lines=() menu=()
+    live=$(live_medium_disk)
+    listing=$("$LSBLK" -dn -P -o PATH,TYPE,SIZE,MODEL)
+    mapfile -t lines < <(filter_disks "$listing" "$live")
+    (( ${#lines[@]} > 0 )) || die "no installable disks found"
+    for line in "${lines[@]}"; do
+        IFS='|' read -r path size model <<< "$line"
+        menu+=("$path  $size  $model")
+    done
+    choice=$(choose disk "Target disk (will be ERASED):" "${menu[0]}" "${menu[@]}")
+    printf '%s\n' "${choice%%  *}"
+}
+
+# Ask everything upfront. PROMPT ORDER IS A CONTRACT with tests/qemu/harness.py (see the
+# header comment). Results land in the SB_INST_* globals render_summary() reads.
+gather_answers() {
+    SB_INST_DISK=$(select_disk)
+
+    SB_INST_HOSTNAME=$(ask hostname "Hostname" "$HOSTNAME" validate_hostname)
+    SB_INST_TIMEZONE=$(ask timezone "Timezone (e.g. Europe/Amsterdam)" "$TIMEZONE" validate_timezone)
+    SB_INST_LOCALE=$(ask locale "Locale" "$LOCALE" validate_locale)
+    SB_INST_KEYMAP=$(ask keymap "Console keymap (empty = kernel default)" "$KEYMAP")
+    SB_INST_BOOTLOADER=$(choose bootloader "Bootloader:" "$BOOTLOADER" systemd-boot grub)
+
+    local ucode
+    ucode=$(detect_microcode "$(cat /proc/cpuinfo)")
+    SB_INST_MICROCODE=none
+    if [[ -n "$ucode" ]]; then
+        if ask_yesno microcode "Install CPU microcode updates ($ucode)?" y; then
+            SB_INST_MICROCODE=$ucode
+        fi
+    else
+        if ask_yesno microcode "CPU vendor not detected. Install both intel-ucode and amd-ucode?" n; then
+            SB_INST_MICROCODE="intel-ucode amd-ucode"
+        fi
+    fi
+
+    SB_INST_FIRMWARE=no
+    if ask_yesno firmware "Install linux-firmware (needed on most real hardware)?" y; then
+        SB_INST_FIRMWARE=yes
+    fi
+
+    local netchoice
+    netchoice=$(choose network "Network configuration for the installed system:" \
+        "systemd-networkd (DHCP, ships with systemd)" \
+        "none (configure it yourself)" \
+        "systemd-networkd (DHCP, ships with systemd)" \
+        "NetworkManager (installs the networkmanager package)")
+    case "$netchoice" in
+        none*)             SB_INST_NETWORK=none ;;
+        systemd-networkd*) SB_INST_NETWORK=networkd ;;
+        NetworkManager*)   SB_INST_NETWORK=networkmanager ;;
+    esac
+
+    SB_INST_ROOT_PASSWORD=$(ask_secret root-password "Root password")
+
+    while true; do
+        SB_INST_USERNAME=$(ask username "Admin user name (empty = none)" "")
+        [[ -z "$SB_INST_USERNAME" ]] && break
+        validate_username "$SB_INST_USERNAME" && break
+        printf 'invalid user name: %s\n' "$SB_INST_USERNAME" >&2
+    done
+    SB_INST_USER_PASSWORD=""
+    if [[ -n "$SB_INST_USERNAME" ]]; then
+        SB_INST_USER_PASSWORD=$(ask_secret user-password "Password for $SB_INST_USERNAME")
+    fi
+
+    SB_INST_PKGS=("${PKGS_BASE[@]}")
+    if [[ "$SB_INST_MICROCODE" != none ]]; then
+        local -a ucode_pkgs
+        read -ra ucode_pkgs <<< "$SB_INST_MICROCODE"
+        SB_INST_PKGS+=("${ucode_pkgs[@]}")
+    fi
+    if [[ "$SB_INST_FIRMWARE" == yes ]]; then
+        SB_INST_PKGS+=(linux-firmware)
+    fi
+    if [[ "$SB_INST_NETWORK" == networkmanager ]]; then
+        SB_INST_PKGS+=(networkmanager)
+    fi
+    if [[ "$SB_INST_BOOTLOADER" == grub ]]; then
+        SB_INST_PKGS+=(grub)
+    fi
+    if [[ -n "$SB_INST_USERNAME" ]]; then
+        SB_INST_PKGS+=(sudo)
+    fi
+}
+
+confirm_or_abort() {
+    printf '\n' >&2
+    render_summary >&2
+    printf '\n  !! ALL DATA ON %s WILL BE ERASED !!\n\n' "$SB_INST_DISK" >&2
+    prompt_marker confirm
+    printf 'Type ERASE to continue, anything else to abort: ' >&2
+    local reply
+    IFS= read -r reply || reply=""
+    [[ "$reply" == ERASE ]] || die "aborted (no changes were made)"
+}
+
+do_install() {
+    local esp rootpart ts snap pool_uuid extra_opts
+    ts=$(date +%Y%m%d-%H%M%S)
+    snap="root-$ts"
+    # A serial-console install carries its console= options into the boot entry (headless
+    # machines stay reachable; this is also what makes the QEMU test observable).
+    extra_opts=$(console_opts_for_tty "$(tty 2>/dev/null || true)")
+
+    # On failure: report, unmount, and leave the user their shell (no poweroff).
+    # shellcheck disable=SC2154   # LINENO is provided by bash
+    trap 'marker "SILVERBLUE-INSTALL-FAIL line=$LINENO"; umount -R /mnt 2>/dev/null || true' ERR
+
+    marker "SILVERBLUE-INSTALL-START disk=$SB_INST_DISK snap=$snap bootloader=$SB_INST_BOOTLOADER"
+
+    marker "SILVERBLUE-INSTALL-STEP name=partition"
+    partition_disk "$SB_INST_DISK"
+    esp=$(partition_path "$SB_INST_DISK" 1)
+    rootpart=$(partition_path "$SB_INST_DISK" 2)
+
+    marker "SILVERBLUE-INSTALL-STEP name=filesystems"
+    format_partitions "$esp" "$rootpart"
+    create_subvolumes "$rootpart" "$snap"
+    mount_target "$rootpart" "$esp" "$snap"
+
+    marker "SILVERBLUE-INSTALL-STEP name=pacstrap"
+    enable_live_multilib
+    enable_live_local_repo
+    run_pacstrap /mnt "${SB_INST_PKGS[@]}"
+
+    marker "SILVERBLUE-INSTALL-STEP name=configure"
+    write_fstab /mnt
+    configure_target_system /mnt "$SB_INST_HOSTNAME" "$SB_INST_TIMEZONE" "$SB_INST_LOCALE" "$SB_INST_KEYMAP"
+    write_os_release /mnt
+    configure_initramfs /mnt
+    install_target_tools /mnt
+    install_local_repo /mnt
+    append_extra_repos /mnt
+    enable_network_stack /mnt "$SB_INST_NETWORK"
+    enable_distro_services /mnt
+    set_root_password /mnt "$SB_INST_ROOT_PASSWORD"
+    if [[ -n "$SB_INST_USERNAME" ]]; then
+        create_admin_user /mnt "$SB_INST_USERNAME" "$SB_INST_USER_PASSWORD"
+    fi
+
+    marker "SILVERBLUE-INSTALL-STEP name=bootloader"
+    pool_uuid=$("$BLKID" -s UUID -o value "$rootpart")
+    if [[ "$SB_INST_BOOTLOADER" == grub ]]; then
+        install_grub /mnt "$snap" "$pool_uuid" "$extra_opts"
+    else
+        install_sdboot /mnt "$snap" "$pool_uuid" "$extra_opts"
+    fi
+
+    sync
+    umount -R /mnt
+    trap - ERR
+    marker "SILVERBLUE-INSTALL-OK snap=$snap uuid=$pool_uuid bootloader=$SB_INST_BOOTLOADER"
+}
+
+offer_reboot() {
+    log "installation complete"
+    if ask_yesno reboot "Reboot into the installed system now?" n; then
+        systemctl reboot
+    else
+        log "reboot when ready with: systemctl reboot"
+    fi
+}
+
+main() {
+    if (( $# > 0 )); then
+        usage
+        exit 2
+    fi
+    printf '%s installer\n' "$DISTRO_NAME" >&2
+    preflight
+    gather_answers
+    confirm_or_abort
+    do_install
+    offer_reboot
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # -E so do_install's ERR trap (FAIL marker + unmount) also fires for failures inside
+    # the sourced library's functions, not only for commands directly in do_install().
+    set -Eeuo pipefail
+    main "$@"
+fi

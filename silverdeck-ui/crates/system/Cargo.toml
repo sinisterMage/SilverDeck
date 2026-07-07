@@ -1,0 +1,12 @@
+[package]
+name = "silverdeck-system"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

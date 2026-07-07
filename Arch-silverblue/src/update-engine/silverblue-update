@@ -1,0 +1,479 @@
+#!/usr/bin/env bash
+#
+# silverblue-update — atomic, snapshot-based, auto-rolling-back updates for Arch Silverblue.
+#
+# Each run snapshots the running Btrfs root into a new subvolume root-YYYYMMDD-HHMMSS,
+# upgrades that snapshot with pacman inside an arch-chroot, validates it, registers it as a
+# new bootloader entry, and arranges for it to boot NEXT without disturbing the permanent
+# default. A post-boot service (silverblue-mark-good) later promotes it to default on
+# success, or the bootloader auto-reverts to the previous snapshot on failure.
+#
+# The running system stays fully mutable: atomicity comes only from Btrfs copy-on-write
+# snapshots, never from read-only mounts.
+#
+# The script is self-contained and sourceable: when sourced (BASH_SOURCE != $0) it only
+# defines functions, so unit tests can exercise the pure logic with mocked command paths.
+
+# --- Dependency-injected command paths (override in tests / unusual layouts) ---------------
+: "${BTRFS:=btrfs}"
+: "${BOOTCTL:=bootctl}"
+: "${GRUB_EDITENV:=grub-editenv}"
+: "${ARCH_CHROOT:=arch-chroot}"
+: "${FINDMNT:=findmnt}"
+: "${MOUNT:=mount}"
+: "${UMOUNT:=umount}"
+
+# --- Configuration (override via environment) ----------------------------------------------
+: "${SB_EFI_DIR:=/efi}"                       # ESP mount point
+: "${SB_TOPLEVEL_MNT:=/run/silverblue/toplevel}"  # where Btrfs subvolid=5 is mounted
+: "${SB_KEEP:=3}"                             # max snapshots to retain
+: "${SB_TRIES:=3}"                            # systemd-boot boot-counting tries
+: "${SB_LIB_DIR:=}"                           # dir containing *-helpers.sh (auto-detected)
+: "${SB_VERIFY_UNIT:=/usr/lib/systemd/system/silverblue-mark-good.service}"
+: "${SB_DISTRO_NAME:=Arch Silverblue}"        # human-readable name used in boot-entry titles
+: "${SB_ESP_SUBDIR:=silverblue}"              # per-snapshot kernel dir on the ESP (systemd-boot)
+: "${SB_SORT_KEY:=silverblue}"                # systemd-boot 'sort-key' grouping value
+
+# --- Runtime state (populated at run time) -------------------------------------------------
+DRY_RUN=false
+VERBOSE=false
+DO_ROLLBACK=false
+BOOTLOADER=""
+SB_ROOT_DEV=""
+SB_POOL_UUID=""
+CURRENT_SUBVOL=""
+SB_KERNEL_OPTS=""
+NEW_SNAP=""
+UPDATE_COMMITTED=0
+TOPLEVEL_WE_MOUNTED=0
+
+# --- Logging & execution guards ------------------------------------------------------------
+log()  { printf '%s\n' "$*" >&2; }
+err()  { printf 'error: %s\n' "$*" >&2; }
+die()  { err "$*"; exit 1; }
+vlog() { if $VERBOSE; then printf '%s\n' "$*" >&2; fi; }
+
+# Run a state-changing command, honoring --dry-run. Named sb_run (not run) so the engine can
+# be sourced into bats unit tests without clobbering bats's own run() helper.
+sb_run() {
+    if $DRY_RUN; then log "DRY: $*"; return 0; fi
+    vlog "+ $*"
+    "$@"
+}
+
+# Write stdin to a file, honoring --dry-run.
+emit_file() {
+    local path=$1
+    if $DRY_RUN; then
+        log "DRY: write $path"
+        cat >/dev/null
+    else
+        vlog "+ write $path"
+        cat >"$path"
+    fi
+}
+
+# --- Locate and source the bootloader helper libraries -------------------------------------
+resolve_lib_dir() {
+    local self_dir d
+    self_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    for d in "$SB_LIB_DIR" "$self_dir" "$self_dir/../bootloader" /usr/lib/silverblue; do
+        [[ -n "$d" && -f "$d/sdboot-helpers.sh" && -f "$d/grub-helpers.sh" ]] && {
+            printf '%s\n' "$d"
+            return 0
+        }
+    done
+    return 1
+}
+
+if _libdir=$(resolve_lib_dir); then
+    SB_LIB_DIR=$_libdir
+    # shellcheck source=/dev/null
+    source "$SB_LIB_DIR/sdboot-helpers.sh"
+    # shellcheck source=/dev/null
+    source "$SB_LIB_DIR/grub-helpers.sh"
+    unset _libdir
+fi
+
+# ============================== Pure functions (unit-tested) ===============================
+
+# Current timestamp (override with SB_NOW for deterministic tests).
+now_ts() {
+    if [[ -n "${SB_NOW:-}" ]]; then printf '%s\n' "$SB_NOW"; else date +%Y%m%d-%H%M%S; fi
+}
+
+# Name for a fresh snapshot, e.g. root-20260628-093000.
+next_snapshot_name() {
+    printf 'root-%s\n' "$(now_ts)"
+}
+
+# Human-readable bootloader label for a snapshot, e.g. "Arch Silverblue 2026-06-28 09:30".
+label_for() {
+    local snap=$1 ts d t
+    ts=${snap#root-}
+    d=${ts%%-*}
+    t=${ts#*-}
+    printf '%s %s-%s-%s %s:%s\n' "$SB_DISTRO_NAME" \
+        "${d:0:4}" "${d:4:2}" "${d:6:2}" "${t:0:2}" "${t:2:2}"
+}
+
+# Extract the booted subvolume from a kernel command line (defaults to /proc/cmdline).
+parse_subvol_from_cmdline() {
+    local cmdline=${1:-} tok val
+    [[ -n "$cmdline" ]] || cmdline=$(cat /proc/cmdline 2>/dev/null || true)
+    for tok in $cmdline; do
+        case "$tok" in
+            rootflags=*subvol=*)
+                val=${tok##*subvol=}
+                val=${val%%,*}
+                printf '%s\n' "$val"
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+# Extra kernel command-line options to carry over to a new entry: everything on the current
+# /proc/cmdline except the root/subvol/initrd bits the engine sets itself (and archiso noise).
+# This preserves things like console=, quiet, etc. so a new root boots like the current one.
+kernel_extra_opts() {
+    local cmdline=${1:-} tok out=""
+    [[ -n "$cmdline" ]] || cmdline=$(cat /proc/cmdline 2>/dev/null || true)
+    for tok in $cmdline; do
+        case "$tok" in
+            BOOT_IMAGE=*|initrd=*|root=*|rootflags=*|rootfstype=*|ro|rw) continue ;;
+            archisobasedir=*|archisosearchuuid=*|archisolabel=*|cow_spacesize=*|copytoram*) continue ;;
+            *) out="$out $tok" ;;
+        esac
+    done
+    printf '%s\n' "${out# }"
+}
+
+# List root-* snapshots in a directory (default: the toplevel mount), sorted oldest-first.
+list_snapshots() {
+    local mnt=${1:-$SB_TOPLEVEL_MNT} name
+    [[ -d "$mnt" ]] || return 0
+    for name in "$mnt"/root-*; do
+        [[ -d "$name" ]] || continue
+        printf '%s\n' "${name##*/}"
+    done | sort
+}
+
+# Given an oldest-first list on stdin and a keep count ($1), print the snapshots to delete.
+prune_plan() {
+    local keep=$1 lines total del
+    mapfile -t lines
+    total=${#lines[@]}
+    del=$(( total - keep ))
+    (( del > 0 )) || return 0
+    printf '%s\n' "${lines[@]:0:del}"
+}
+
+# Print the bootloader in use under an ESP dir ($1): "systemd-boot" or "grub".
+detect_bootloader() {
+    local efi=${1:-$SB_EFI_DIR}
+    if sdboot_is_active "$efi"; then printf 'systemd-boot\n'; return 0; fi
+    if grub_is_active "$efi"; then printf 'grub\n'; return 0; fi
+    return 1
+}
+
+# ============================== Effectful operations =======================================
+
+detect_root_storage() {
+    local raw
+    if [[ -z "$SB_ROOT_DEV" ]]; then
+        raw=$("$FINDMNT" -no SOURCE -T / 2>/dev/null || true)
+        SB_ROOT_DEV=${raw%%[*}
+    fi
+    [[ -n "$SB_POOL_UUID" ]] || SB_POOL_UUID=$("$FINDMNT" -no UUID -T / 2>/dev/null || true)
+}
+
+get_current_subvol() {
+    local sv
+    sv=$(parse_subvol_from_cmdline 2>/dev/null) || sv=""
+    if [[ -z "$sv" ]]; then
+        sv=$("$FINDMNT" -no FSROOT -T / 2>/dev/null || true)
+        sv=${sv#/}
+    fi
+    printf '%s\n' "$sv"
+}
+
+load_runtime() {
+    BOOTLOADER=${SB_BOOTLOADER:-$(detect_bootloader "$SB_EFI_DIR" 2>/dev/null || true)}
+    detect_root_storage
+    CURRENT_SUBVOL=$(get_current_subvol 2>/dev/null || true)
+    SB_KERNEL_OPTS=${SB_KERNEL_OPTS:-$(kernel_extra_opts)}
+
+    if [[ -z "$BOOTLOADER" ]]; then
+        if $DRY_RUN; then
+            BOOTLOADER=systemd-boot
+            log "note: bootloader not detected under $SB_EFI_DIR; assuming systemd-boot (dry-run)"
+        else
+            die "could not detect bootloader under $SB_EFI_DIR (need systemd-boot or grub)"
+        fi
+    fi
+    if [[ -z "$CURRENT_SUBVOL" && $DRY_RUN == true ]]; then
+        CURRENT_SUBVOL="root-current"
+    fi
+    vlog "bootloader=$BOOTLOADER dev=$SB_ROOT_DEV uuid=$SB_POOL_UUID current=$CURRENT_SUBVOL"
+}
+
+ensure_prereqs() {
+    $DRY_RUN && return 0
+    [[ ${EUID:-$(id -u)} -eq 0 ]] || die "must run as root"
+    command -v "$BTRFS" >/dev/null 2>&1 || die "btrfs not found (install btrfs-progs)"
+    [[ "$("$FINDMNT" -no FSTYPE -T / 2>/dev/null)" == btrfs ]] || die "root filesystem is not Btrfs"
+    [[ -n "$SB_ROOT_DEV" ]] || die "could not determine root device"
+    [[ -n "$SB_POOL_UUID" ]] || die "could not determine Btrfs pool UUID"
+}
+
+ensure_toplevel_mounted() {
+    sb_run mkdir -p "$SB_TOPLEVEL_MNT"
+    if $DRY_RUN; then return 0; fi
+    if ! mountpoint -q "$SB_TOPLEVEL_MNT"; then
+        sb_run "$MOUNT" -o subvolid=5 "$SB_ROOT_DEV" "$SB_TOPLEVEL_MNT"
+        TOPLEVEL_WE_MOUNTED=1
+    fi
+}
+
+cleanup_toplevel() {
+    [[ "$TOPLEVEL_WE_MOUNTED" == 1 ]] || return 0
+    sb_run "$UMOUNT" "$SB_TOPLEVEL_MNT" || true
+    TOPLEVEL_WE_MOUNTED=0
+}
+
+create_snapshot() {
+    local snap=$1
+    sb_run "$BTRFS" subvolume snapshot / "$SB_TOPLEVEL_MNT/$snap"
+}
+
+chroot_upgrade() {
+    local root=$1
+    local conf="$root/etc/pacman.conf"
+    # pacman returns non-zero on any download/package error; set -e + the EXIT trap then
+    # discard the half-built snapshot, so no partial snapshot is ever left behind.
+    #
+    # Inside an arch-chroot on a snapshot mounted at a deep path, pacman cannot resolve the
+    # cachedir's mountpoint, which breaks both its free-space check (CheckSpace) and its
+    # downloader sandbox. Disable CheckSpace for the upgrade (restored afterwards) and pass
+    # --disable-sandbox. The snapshot/atomic model makes the pre-check redundant anyway.
+    if [[ -f "$conf" ]]; then
+        sb_run sed -i 's/^[[:space:]]*CheckSpace/#CheckSpace/' "$conf"
+    fi
+    sb_run "$ARCH_CHROOT" "$root" pacman -Syu --noconfirm --disable-sandbox
+    if [[ -f "$conf" ]]; then
+        sb_run sed -i 's/^#CheckSpace/CheckSpace/' "$conf"
+    fi
+}
+
+validate_root() {
+    local root=$1
+    local boot="$root/boot"
+    if $DRY_RUN; then
+        log "DRY: validate $boot (>=1 kernel, >=1 initramfs, systemd-analyze verify)"
+        return 0
+    fi
+    shopt -s nullglob
+    local kernels=("$boot"/vmlinuz-*) initrds=("$boot"/initramfs-*.img)
+    shopt -u nullglob
+    (( ${#kernels[@]} > 0 )) || { err "no kernel image under $boot"; return 1; }
+    (( ${#initrds[@]} > 0 )) || { err "no initramfs under $boot"; return 1; }
+    vlog "found kernels: ${kernels[*]##*/}"
+    vlog "found initramfs: ${initrds[*]##*/}"
+    if [[ -e "$root$SB_VERIFY_UNIT" ]]; then
+        if ! sb_run "$ARCH_CHROOT" "$root" systemd-analyze verify "$SB_VERIFY_UNIT"; then
+            err "systemd-analyze verify reported errors for $SB_VERIFY_UNIT"
+            return 1
+        fi
+    else
+        vlog "skipping systemd-analyze verify ($SB_VERIFY_UNIT absent in new root)"
+    fi
+}
+
+register_entry() {
+    local snap=$1 label=$2
+    if $DRY_RUN; then
+        log "DRY: register $BOOTLOADER boot entry for $snap (\"$label\")"
+        return 0
+    fi
+    case "$BOOTLOADER" in
+        systemd-boot)
+            sdboot_register_entry "$snap" "$label" "$SB_POOL_UUID" \
+                "$SB_TOPLEVEL_MNT/$snap/boot" "$SB_EFI_DIR" "$SB_TRIES"
+            ;;
+        grub)
+            grub_regen_all
+            ;;
+        *) die "unsupported bootloader: $BOOTLOADER" ;;
+    esac
+}
+
+grub_regen_all() {
+    local pairs=() snap
+    while IFS= read -r snap; do
+        [[ -n "$snap" ]] || continue
+        pairs+=("$snap|$(label_for "$snap")")
+    done < <(list_snapshots)
+    grub_regen_cfg "$SB_EFI_DIR" "$SB_POOL_UUID" "${pairs[@]}"
+}
+
+set_next_boot() {
+    local snap=$1
+    case "$BOOTLOADER" in
+        systemd-boot) sdboot_set_next "$snap" ;;
+        grub)         grub_set_next "$snap" "$SB_EFI_DIR" ;;
+        *) die "unsupported bootloader: $BOOTLOADER" ;;
+    esac
+}
+
+prune_boot_entry() {
+    local snap=$1
+    case "$BOOTLOADER" in
+        systemd-boot) sdboot_prune_entry "$snap" "$SB_EFI_DIR" ;;
+        grub)         grub_prune_entry "$snap" "$SB_EFI_DIR" ;;
+    esac
+}
+
+prune_snapshots() {
+    local victims=() snap
+    mapfile -t victims < <(list_snapshots | prune_plan "$SB_KEEP")
+    for snap in "${victims[@]}"; do
+        [[ -n "$snap" ]] || continue
+        if [[ "$snap" == "$CURRENT_SUBVOL" ]]; then
+            vlog "keeping running root $snap"
+            continue
+        fi
+        log "    pruning $snap"
+        prune_boot_entry "$snap"
+        discard_snapshot "$snap"
+    done
+    [[ "$BOOTLOADER" == grub ]] && grub_regen_all
+    return 0
+}
+
+discard_snapshot() {
+    local snap=$1 path
+    [[ -n "$snap" ]] || return 0
+    path="$SB_TOPLEVEL_MNT/$snap"
+    if [[ -d "$path" ]]; then
+        sb_run "$BTRFS" subvolume delete "$path" || log "warn: could not delete subvolume $path"
+    fi
+}
+
+# Newest snapshot that is not the currently running root.
+previous_snapshot() {
+    local snap prev=""
+    while IFS= read -r snap; do
+        [[ "$snap" == "$CURRENT_SUBVOL" ]] && continue
+        prev=$snap
+    done < <(list_snapshots)
+    [[ -n "$prev" ]] && printf '%s\n' "$prev"
+}
+
+# ============================== Top-level flows ============================================
+
+do_update() {
+    local label
+    ensure_prereqs
+    NEW_SNAP=$(next_snapshot_name)
+    label=$(label_for "$NEW_SNAP")
+
+    log "==> Atomic update plan"
+    log "    bootloader : $BOOTLOADER"
+    log "    current    : ${CURRENT_SUBVOL:-<unknown>}"
+    log "    new root   : $NEW_SNAP"
+    log "    label      : $label"
+    log "    keep       : $SB_KEEP snapshots"
+
+    ensure_toplevel_mounted
+    log "==> [1/6] Snapshot running root -> $NEW_SNAP"
+    create_snapshot "$NEW_SNAP"
+    log "==> [2/6] Upgrade packages in new root (pacman -Syu)"
+    chroot_upgrade "$SB_TOPLEVEL_MNT/$NEW_SNAP"
+    log "==> [3/6] Validate new root (kernel, initramfs, unit verify)"
+    validate_root "$SB_TOPLEVEL_MNT/$NEW_SNAP"
+    log "==> [4/6] Register boot entry"
+    register_entry "$NEW_SNAP" "$label"
+    log "==> [5/6] Make it the next boot (permanent default unchanged)"
+    case "$BOOTLOADER" in
+        grub)         set_next_boot "$NEW_SNAP" ;;
+        systemd-boot) vlog "systemd-boot: newest version '$NEW_SNAP' boots next automatically" ;;
+    esac
+    log "==> [6/6] Prune snapshots beyond $SB_KEEP"
+    prune_snapshots
+
+    UPDATE_COMMITTED=1
+    cleanup_toplevel
+    log "==> Done. Reboot to apply: $label"
+}
+
+do_rollback() {
+    local prev
+    ensure_prereqs
+    ensure_toplevel_mounted
+    prev=$(previous_snapshot) || true
+    if [[ -z "$prev" ]]; then
+        if $DRY_RUN; then
+            prev="root-previous"
+            log "note: no snapshots visible; using placeholder $prev (dry-run)"
+        else
+            die "no previous snapshot available to roll back to"
+        fi
+    fi
+    log "==> Rollback: next boot -> $prev ($(label_for "$prev"))"
+    set_next_boot "$prev"
+    UPDATE_COMMITTED=1
+    cleanup_toplevel
+    log "==> Done. Reboot to roll back into $prev"
+}
+
+# ============================== Entry point ===============================================
+
+usage() {
+    cat <<'EOF'
+Usage: silverblue-update [--dry-run] [--verbose] [--rollback]
+
+  (no args)    Snapshot the running root, upgrade it, validate it, and register it as the
+               next boot target without changing the permanent default.
+  --rollback   Set the previous snapshot as the next boot target (manual rollback).
+  --dry-run    Print the planned steps without making any changes.
+  --verbose    Verbose output (echo each privileged command).
+  -h, --help   Show this help and exit.
+EOF
+}
+
+parse_args() {
+    while (( $# )); do
+        case "$1" in
+            --dry-run)     DRY_RUN=true ;;
+            --verbose|-v)  VERBOSE=true ;;
+            --rollback)    DO_ROLLBACK=true ;;
+            -h|--help)     usage; exit 0 ;;
+            *)             die "unknown argument: $1 (try --help)" ;;
+        esac
+        shift
+    done
+}
+
+on_exit() {
+    local rc=$?
+    if (( rc != 0 )) && [[ -n "$NEW_SNAP" && "$UPDATE_COMMITTED" != 1 ]]; then
+        err "update failed (rc=$rc); discarding snapshot $NEW_SNAP"
+        discard_snapshot "$NEW_SNAP" || true
+    fi
+    cleanup_toplevel || true
+    exit "$rc"
+}
+
+main() {
+    parse_args "$@"
+    trap on_exit EXIT
+    load_runtime
+    if $DO_ROLLBACK; then do_rollback; else do_update; fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    set -euo pipefail
+    main "$@"
+fi

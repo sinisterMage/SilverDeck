@@ -1,0 +1,12 @@
+# SilverDeck kiosk autologin. Both sessions point at the same command, so the
+# console re-enters the kiosk if the session ever exits.
+[terminal]
+vt = 1
+
+[initial_session]
+command = "silverdeck-session"
+user = "deck"
+
+[default_session]
+command = "silverdeck-session"
+user = "deck"

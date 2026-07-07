@@ -1,0 +1,38 @@
+# SilverDeck kiosk session: greetd autologin -> sway kiosk -> silverdeck-ui,
+# plus controller udev rules, polkit grants, firstboot + update units and the
+# curated store allowlist. Pure config payload; files live in files/ next to
+# this PKGBUILD (copied into the build container by build-repo.sh).
+pkgname=silverdeck-session
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="SilverDeck kiosk session (greetd + sway + policy)"
+arch=(any)
+url="https://github.com/sinisterMage/SilverDeck"
+license=(MIT)
+depends=(greetd sway silverdeck-ui polkit flatpak)
+backup=(etc/greetd/silverdeck.toml etc/silverdeck/sway.config)
+
+package() {
+    local files="$startdir/files"
+    # Not /etc/greetd/config.toml — that file belongs to the greetd package; a
+    # drop-in points greetd.service at our own config instead.
+    install -Dm0644 "$files/greetd-config.toml" "$pkgdir/etc/greetd/silverdeck.toml"
+    install -Dm0644 "$files/greetd-dropin.conf" \
+        "$pkgdir/usr/lib/systemd/system/greetd.service.d/silverdeck.conf"
+    install -Dm0755 "$files/silverdeck-session" "$pkgdir/usr/bin/silverdeck-session"
+    install -Dm0755 "$files/silverdeck-ui-run" "$pkgdir/usr/bin/silverdeck-ui-run"
+    install -Dm0644 "$files/sway.config" "$pkgdir/etc/silverdeck/sway.config"
+    install -Dm0644 "$files/silverdeck-sysusers.conf" \
+        "$pkgdir/usr/lib/sysusers.d/silverdeck.conf"
+    install -Dm0644 "$files/silverdeck-tmpfiles.conf" \
+        "$pkgdir/usr/lib/tmpfiles.d/silverdeck.conf"
+    install -Dm0644 "$files/71-silverdeck-controllers.rules" \
+        "$pkgdir/usr/lib/udev/rules.d/71-silverdeck-controllers.rules"
+    install -Dm0644 "$files/50-silverdeck.rules" \
+        "$pkgdir/etc/polkit-1/rules.d/50-silverdeck.rules"
+    install -Dm0644 "$files/silverdeck-update.service" \
+        "$pkgdir/usr/lib/systemd/system/silverdeck-update.service"
+    install -Dm0644 "$files/silverdeck-firstboot.service" \
+        "$pkgdir/usr/lib/systemd/system/silverdeck-firstboot.service"
+    install -Dm0644 "$files/store.json" "$pkgdir/usr/share/silverdeck/store.json"
+}

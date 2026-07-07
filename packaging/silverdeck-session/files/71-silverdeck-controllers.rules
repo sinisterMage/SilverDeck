@@ -1,0 +1,37 @@
+# SilverDeck controller access rules (vendored, in the spirit of
+# game-devices-udev/steam-devices): grant the seated user access to gamepad
+# evdev and hidraw nodes so the console UI (gilrs) works without Steam.
+
+# Any evdev device the kernel classifies as a joystick.
+SUBSYSTEM=="input", ENV{ID_INPUT_JOYSTICK}=="1", TAG+="uaccess"
+KERNEL=="js[0-9]*", TAG+="uaccess"
+
+# --- hidraw by vendor (USB) -------------------------------------------------
+# Microsoft (Xbox pads)
+KERNEL=="hidraw*", ATTRS{idVendor}=="045e", TAG+="uaccess"
+# Sony (DualShock 3/4, DualSense)
+KERNEL=="hidraw*", ATTRS{idVendor}=="054c", TAG+="uaccess"
+# Nintendo (Switch Pro Controller, Joy-Cons)
+KERNEL=="hidraw*", ATTRS{idVendor}=="057e", TAG+="uaccess"
+# Valve (Steam Controller, Steam Deck)
+KERNEL=="hidraw*", ATTRS{idVendor}=="28de", TAG+="uaccess"
+# 8BitDo
+KERNEL=="hidraw*", ATTRS{idVendor}=="2dc8", TAG+="uaccess"
+# Logitech (F310/F710 and friends)
+KERNEL=="hidraw*", ATTRS{idVendor}=="046d", TAG+="uaccess"
+# PowerA
+KERNEL=="hidraw*", ATTRS{idVendor}=="20d6", TAG+="uaccess"
+# PDP
+KERNEL=="hidraw*", ATTRS{idVendor}=="0e6f", TAG+="uaccess"
+# Hori
+KERNEL=="hidraw*", ATTRS{idVendor}=="0f0d", TAG+="uaccess"
+
+# --- hidraw over Bluetooth (match by HID bus id) -----------------------------
+# Sony
+KERNEL=="hidraw*", KERNELS=="0005:054C:*", TAG+="uaccess"
+# Nintendo
+KERNEL=="hidraw*", KERNELS=="0005:057E:*", TAG+="uaccess"
+# Microsoft Xbox Wireless
+KERNEL=="hidraw*", KERNELS=="0005:045E:*", TAG+="uaccess"
+# 8BitDo
+KERNEL=="hidraw*", KERNELS=="0005:2DC8:*", TAG+="uaccess"

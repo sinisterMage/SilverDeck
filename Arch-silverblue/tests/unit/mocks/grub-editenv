@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Mock grub-editenv: records its invocation to $SB_MOCK_LOG and succeeds.
+printf '%s %s\n' "$(basename "$0")" "$*" >> "${SB_MOCK_LOG:-/dev/null}"
+exit 0

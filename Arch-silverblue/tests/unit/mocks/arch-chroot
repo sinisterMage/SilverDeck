@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Mock arch-chroot: records its invocation to $SB_MOCK_LOG and succeeds (so pacman /
+# systemd-analyze verify calls inside a chroot become no-ops in unit tests).
+printf '%s %s\n' "$(basename "$0")" "$*" >> "${SB_MOCK_LOG:-/dev/null}"
+exit 0

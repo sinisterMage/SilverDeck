@@ -1,0 +1,7 @@
+# Netlify config for the project website (website/ — Astro + Starlight).
+# publish is relative to base, i.e. website/dist. Node version comes from
+# website/.node-version.
+[build]
+  base = "website"
+  command = "npm run build"
+  publish = "dist"

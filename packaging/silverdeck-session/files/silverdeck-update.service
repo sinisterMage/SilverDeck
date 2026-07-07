@@ -1,0 +1,13 @@
+[Unit]
+Description=SilverDeck atomic OS update (snapshot, upgrade, validate, register)
+Documentation=https://github.com/sinisterMage/SilverDeck
+# One update at a time; the UI starts this unit and streams its journal.
+RefuseManualStop=yes
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/silverdeck-update
+TimeoutStartSec=1h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

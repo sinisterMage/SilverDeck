@@ -1,0 +1,112 @@
+---
+title: Getting Started
+description: Build the Arch Silverblue ISO, test it in QEMU, and use the atomic update CLI on an installed system.
+---
+
+There are two ways in: **install it on real hardware** from a released ISO
+using the minimal interactive installer — see
+[Install on Real Hardware](/guides/installing/) — or **build and test it
+yourself**. This page walks the build-and-test path, then covers the
+`silverblue-update` CLI you get on an installed system.
+
+## Prerequisites
+
+The dev host needs only `docker` and `qemu-system-x86_64` — all Arch tooling
+runs inside the build container and the QEMU guest. `shellcheck` and `bats`
+are fetched on demand via `nix shell` (the Makefile does this for you); if you
+are not on Nix, install `shellcheck` and `bats-core` yourself.
+
+| Task             | Needs                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------ |
+| `make lint`      | `nix` (or host `shellcheck`)                                                          |
+| `make test-unit` | `nix` (or host `bats-core`) + `bash`                                                  |
+| `make build-iso` | `docker` with `--privileged` (mkarchiso needs loop/mount); network to fetch packages  |
+| `make test-qemu` | `qemu-system-x86_64`, OVMF firmware, `python3`; KVM optional (TCG fallback)           |
+
+## Clone and run the fast loop
+
+No docker, no QEMU, no root needed for the inner loop:
+
+```bash
+git clone https://github.com/sinisterMage/Arch-silverblue.git
+cd Arch-silverblue
+
+make lint          # shellcheck every script — zero findings
+make test-unit     # bats unit tests for naming / pruning / detection / rendering
+```
+
+## Build the ISO
+
+```bash
+make build-iso     # produces iso/output/*.iso
+```
+
+This runs `mkarchiso` inside a privileged Docker container (loop devices are
+required) and downloads packages, so it needs network. The result lands in
+`iso/output/`.
+
+## Try it in QEMU
+
+```bash
+make test-qemu
+```
+
+This boots the ISO headless over a serial console, installs Arch Silverblue
+onto a virtual disk via the test autoinstaller, and then asserts both paths:
+
+- **Happy path** — update → reboot → the new root is marked good.
+- **Rollback path** — a deliberately broken update → the system reverts to the
+  previous root on its own.
+
+The update cycle is hermetic by default (a synthetic bumped package in an
+offline repo baked into the ISO); pass `--net` to `tests/qemu/run.sh` for a
+real `pacman -Syu` instead, or `--bootloader grub` to drive GRUB.
+`make test-qemu-interactive` runs a third scenario that drives the
+**interactive installer** end-to-end over the serial console and verifies the
+installed system.
+
+:::note[Real hardware]
+To install on a physical machine, follow
+[Install on Real Hardware](/guides/installing/) — download a released ISO,
+boot it in UEFI mode, and run `silverblue-install`. The default `PKGS_BASE`
+package set omits `linux-firmware` (VM-oriented), so accept the installer's
+default-on `linux-firmware` prompt on real machines. The *unattended*
+autoinstaller in the ISO remains a QEMU-only test appliance: it is gated
+behind a `fw_cfg` flag and never fires on a normal boot.
+:::
+
+## Using an installed system
+
+`silverblue-update` must run as root on a Btrfs root with an ESP at `/efi`.
+
+```
+silverblue-update [--dry-run] [--verbose] [--rollback]
+
+  (no args)    Snapshot the running root, upgrade it, validate it, and register it as the
+               next boot target without changing the permanent default.
+  --rollback   Set the previous snapshot as the next boot target (manual rollback).
+  --dry-run    Print the planned steps without making any changes.
+  --verbose    Echo each privileged command as it runs.
+```
+
+Everything else is automatic: after reboot, `silverblue-mark-good.service`
+health-checks the boot and either promotes the new root to permanent default
+or lets the bootloader fall back to the previous one.
+
+Key environment overrides (see the top of
+[`src/update-engine/silverblue-update`](https://github.com/sinisterMage/Arch-silverblue/blob/main/src/update-engine/silverblue-update)):
+
+| Variable     | Default | Meaning                                  |
+| ------------ | ------- | ---------------------------------------- |
+| `SB_EFI_DIR` | `/efi`  | ESP mountpoint                           |
+| `SB_KEEP`    | `3`     | Max snapshots retained                   |
+| `SB_TRIES`   | `3`     | systemd-boot boot-counting tries         |
+
+## Where to go next
+
+- [Update & Rollback Flow](/architecture/update-flow/) — the full architecture
+  with the on-disk layout and the seven-step diagram.
+- [Derive Your Own Distro](/guides/deriving/) — fork this into your own
+  branded atomic distro by editing one file.
+- [FAQ](/faq/) — quick answers, including how this differs from
+  snapper/Timeshift setups.

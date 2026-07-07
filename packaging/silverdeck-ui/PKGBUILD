@@ -1,0 +1,30 @@
+# SilverDeck console UI. Built by packaging/build-repo.sh inside the
+# silverdeck-builder container with the repo mounted at $SILVERDECK_SRC
+# (default /src); not intended for standalone makepkg on a host.
+pkgname=silverdeck-ui
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="SilverDeck console shell (GPUI)"
+arch=(x86_64)
+url="https://github.com/sinisterMage/SilverDeck"
+license=(MIT)
+depends=(wayland libxkbcommon libxkbcommon-x11 libxcb vulkan-icd-loader fontconfig freetype2 gcc-libs glibc)
+makedepends=(rust pkgconf cmake clang)
+options=(!lto !debug)
+
+prepare() {
+    # Copy only the sources (never a host target/ dir).
+    local src="${SILVERDECK_SRC:-/src}/silverdeck-ui"
+    mkdir -p "$srcdir/workspace"
+    cp -r "$src/Cargo.toml" "$src/Cargo.lock" "$src/crates" "$srcdir/workspace/"
+}
+
+build() {
+    cd "$srcdir/workspace"
+    cargo build --release --locked -p silverdeck-app
+}
+
+package() {
+    install -Dm0755 "$srcdir/workspace/target/release/silverdeck-ui" \
+        "$pkgdir/usr/bin/silverdeck-ui"
+}

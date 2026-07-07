@@ -1,0 +1,17 @@
+[Unit]
+Description=Mark the current Arch Silverblue root good (or trigger rollback)
+Documentation=https://github.com/sinisterMage/Arch-silverblue
+# Run late, once the system is essentially up, so the health check is meaningful.
+After=multi-user.target
+# If the health check fails (or this unit times out), revert to the previous snapshot.
+OnFailure=silverblue-rollback.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/silverblue/silverblue-mark-good.sh
+# A wedged boot that never finishes within the timeout is treated as a failed boot.
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# SilverDeck session entry point (run by greetd as the deck user).
+set -u
+
+export XDG_CURRENT_DESKTOP=sway
+export XDG_SESSION_TYPE=wayland
+
+# VMs (and machines without a render node) fall back to software rendering:
+# sway composites with pixman and the UI renders on lavapipe (vulkan-swrast).
+# A render-node check alone is not enough — virtio-gpu exposes one without
+# offering usable GL, and wlroots refuses software GL.
+if ! ls /dev/dri/renderD* >/dev/null 2>&1 \
+    || systemd-detect-virt --vm --quiet \
+    || grep -qw silverdeck.vm /proc/cmdline; then
+    export WLR_RENDERER=pixman
+    export WLR_NO_HARDWARE_CURSORS=1
+fi
+
+exec systemd-cat -t silverdeck-session sway --config /etc/silverdeck/sway.config

@@ -1,0 +1,7 @@
+[Unit]
+Description=Arch Silverblue rollback to the previous root
+Documentation=https://github.com/sinisterMage/Arch-silverblue
+# Pulled in by silverblue-mark-good.service's OnFailure=. Requiring the rollback service
+# makes starting this target perform the rollback and reboot.
+Requires=silverblue-rollback.service
+After=silverblue-rollback.service

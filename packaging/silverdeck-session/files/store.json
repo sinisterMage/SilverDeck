@@ -1,0 +1,36 @@
+{
+  "categories": [
+    {
+      "name": "Games",
+      "apps": [
+        "org.supertuxproject.SuperTux",
+        "net.supertuxkart.SuperTuxKart",
+        "net.minetest.Minetest",
+        "com.github.Anuken.Mindustry",
+        "com.shatteredpixel.shatteredpixeldungeon",
+        "org.hedgewars.Hedgewars",
+        "io.github.unciv.Unciv",
+        "org.wesnoth.Wesnoth"
+      ]
+    },
+    {
+      "name": "Emulators",
+      "apps": [
+        "org.libretro.RetroArch",
+        "org.DolphinEmu.dolphin-emu",
+        "org.ppsspp.PPSSPP",
+        "net.pcsx2.PCSX2",
+        "io.mgba.mGBA",
+        "org.duckstation.DuckStation"
+      ]
+    },
+    {
+      "name": "Apps",
+      "apps": [
+        "com.heroicgameslauncher.hgl",
+        "net.davidotek.pupgui2",
+        "org.mozilla.firefox"
+      ]
+    }
+  ]
+}

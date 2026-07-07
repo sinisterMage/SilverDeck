@@ -1,0 +1,10 @@
+[Unit]
+Description=Roll back to the previous Arch Silverblue root and reboot
+Documentation=https://github.com/sinisterMage/Arch-silverblue
+DefaultDependencies=no
+Conflicts=reboot.target
+After=silverblue-mark-good.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/silverblue/silverblue-rollback.sh

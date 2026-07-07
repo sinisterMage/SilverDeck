@@ -1,0 +1,31 @@
+/* Arch Silverblue site theme — cyan accent matching DISTRO_ANSI_COLOR="0;36",
+   mono headings/wordmark for the terminal flavor. Body text stays sans. */
+
+:root {
+	/* Dark theme (primary) accent ramp */
+	--sl-color-accent-low: #003c40;
+	--sl-color-accent: #00a8b3;
+	--sl-color-accent-high: #9ff0f5;
+	--sl-font-mono: ui-monospace, 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #c7f4f7;
+	--sl-color-accent: #007a85;
+	--sl-color-accent-high: #003c40;
+}
+
+.site-title {
+	font-family: var(--sl-font-mono);
+	letter-spacing: -0.02em;
+}
+
+h1,
+h2 {
+	font-family: var(--sl-font-mono);
+}
+
+/* The ASCII diagrams in the synced docs rely on horizontal scroll — never wrap. */
+pre code {
+	white-space: pre;
+}

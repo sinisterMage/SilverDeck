@@ -1,0 +1,18 @@
+[Unit]
+Description=Arch Silverblue automated install (QEMU test harness)
+# Only runs when the QEMU fw_cfg blob opt/silverblue/scenario is present (the qemu_fw_cfg
+# module is force-loaded via /etc/modules-load.d). On a normal interactive boot of the ISO
+# this path does not exist, so the installer never touches the disk.
+ConditionPathExists=/sys/firmware/qemu_fw_cfg/by_name/opt/silverblue/scenario/raw
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/silverblue-autoinstall.sh
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

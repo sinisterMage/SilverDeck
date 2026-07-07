@@ -1,0 +1,14 @@
+[Unit]
+Description=SilverDeck first-boot setup (flathub remote)
+ConditionPathExists=!/var/lib/silverdeck/.flathub-done
+Wants=network-online.target
+After=network-online.target NetworkManager-wait-online.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'flatpak remote-add --if-not-exists --system flathub https://dl.flathub.org/repo/flathub.flatpakrepo && touch /var/lib/silverdeck/.flathub-done'
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
