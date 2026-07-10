@@ -9,9 +9,10 @@ ASB_DIR     := Arch-silverblue
 REPO_OUT    := $(ASB_DIR)/iso/local-repo
 NIXDEV      := nix develop path:$(CURDIR)/$(UI_DIR) --command
 
-.PHONY: ui-check ui-run ui-run-kiosk ui-run-lavapipe ui-package build-iso test-qemu test clean
+.PHONY: ui-check ui-run ui-run-kiosk ui-run-lavapipe installer-run installer-run-kiosk ui-package build-iso test-qemu test clean
 
 ui-check:
+	cd $(UI_DIR) && $(NIXDEV) cargo fmt --all --check
 	cd $(UI_DIR) && $(NIXDEV) cargo clippy --workspace --all-targets -- -D warnings
 	cd $(UI_DIR) && $(NIXDEV) cargo test --workspace
 
@@ -21,6 +22,13 @@ ui-run:
 # Validate kiosk behavior (fullscreen rules, sway IPC focus) in a nested sway.
 ui-run-kiosk:
 	cd $(UI_DIR) && $(NIXDEV) sh -c 'cargo build -p silverdeck-app && sway -c dev/sway.config'
+
+# GUI installer against the fake engine (full flow, no root, no disks touched).
+installer-run:
+	cd $(UI_DIR) && $(NIXDEV) env SILVERDECK_FAKE_INSTALL=1 cargo run -p silverdeck-installer
+
+installer-run-kiosk:
+	cd $(UI_DIR) && $(NIXDEV) sh -c 'cargo build -p silverdeck-installer && sway -c dev/installer-sway.config'
 
 # Prove the software-Vulkan path used inside QEMU (lavapipe).
 ui-run-lavapipe:

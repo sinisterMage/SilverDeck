@@ -189,7 +189,10 @@ pub fn ensure_flathub_remote(runner: &dyn CommandRunner) -> anyhow::Result<()> {
 pub enum InstallEvent {
     /// 0..=100, monotone per install.
     Progress(u8),
-    Done { success: bool, message: String },
+    Done {
+        success: bool,
+        message: String,
+    },
 }
 
 /// Install an app from flathub, reporting progress. Blocking — run on a

@@ -19,6 +19,8 @@ SHELL_FILES := \
 	src/installer/silverblue-install \
 	iso/build.sh \
 	iso/airootfs/usr/local/bin/silverblue-autoinstall.sh \
+	iso/airootfs/usr/local/bin/silverdeck-live-session \
+	iso/airootfs/usr/local/bin/silverdeck-installer-run \
 	tests/qemu/run.sh \
 	tests/unit/run.sh \
 	tools/verify-units.sh \

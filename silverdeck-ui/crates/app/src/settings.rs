@@ -140,7 +140,10 @@ fn activate(root: &mut RootView, row: Row, cx: &mut Context<RootView>) {
         }
         Row::Update => start_update(root, cx),
         Row::Reboot => {
-            root.modal = Some(Modal::confirm("Restart the console?", PendingAction::Reboot));
+            root.modal = Some(Modal::confirm(
+                "Restart the console?",
+                PendingAction::Reboot,
+            ));
         }
         Row::Poweroff => {
             root.modal = Some(Modal::confirm(
@@ -264,7 +267,11 @@ pub fn render(root: &RootView, _cx: &mut Context<RootView>) -> impl IntoElement 
                 .px_3()
                 .py_2()
                 .rounded_md()
-                .bg(if is_selected { theme::panel_hi() } else { theme::bg() })
+                .bg(if is_selected {
+                    theme::panel_hi()
+                } else {
+                    theme::bg()
+                })
                 .child(div().child(label))
                 .child(div().text_color(theme::text_dim()).child(value))
         }))

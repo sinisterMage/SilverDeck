@@ -80,9 +80,7 @@ pub fn build_command(spec: &LaunchSpec, opts: &LaunchOptions, heroic_native: boo
 
 pub fn heroic_is_native() -> bool {
     std::env::var_os("PATH")
-        .map(|path| {
-            std::env::split_paths(&path).any(|dir| dir.join("heroic").is_file())
-        })
+        .map(|path| std::env::split_paths(&path).any(|dir| dir.join("heroic").is_file()))
         .unwrap_or(false)
 }
 
@@ -195,7 +193,11 @@ mod tests {
 
     #[test]
     fn steam_launch_is_a_url_invocation() {
-        let argv = build_command(&LaunchSpec::SteamAppId(620), &LaunchOptions::default(), false);
+        let argv = build_command(
+            &LaunchSpec::SteamAppId(620),
+            &LaunchOptions::default(),
+            false,
+        );
         assert_eq!(argv, ["steam", "steam://rungameid/620"]);
     }
 
@@ -256,7 +258,10 @@ mod tests {
             false,
         );
         assert_eq!(argv[0], "flatpak");
-        assert!(argv.last().unwrap().starts_with("heroic://launch/legendary/"));
+        assert!(argv
+            .last()
+            .unwrap()
+            .starts_with("heroic://launch/legendary/"));
         let native = build_command(
             &LaunchSpec::Heroic {
                 runner: "gog".into(),

@@ -3,6 +3,7 @@
 
 use gpui::{div, prelude::*, px, Context, KeyDownEvent};
 use silverdeck_input::NavEvent;
+use silverdeck_ui_kit::osk::{self, OskOutcome, OskState};
 
 use crate::root::RootView;
 use crate::{settings, store_view, theme};
@@ -23,10 +24,7 @@ pub enum Modal {
     },
     WifiPassword {
         ssid: String,
-        value: String,
-        row: usize,
-        col: usize,
-        shift: bool,
+        osk: OskState,
     },
     UpdateLog,
 }
@@ -43,53 +41,9 @@ impl Modal {
     pub fn wifi_password(ssid: String) -> Self {
         Modal::WifiPassword {
             ssid,
-            value: String::new(),
-            row: 0,
-            col: 0,
-            shift: false,
+            osk: OskState::new(),
         }
     }
-}
-
-// --- On-screen keyboard layout ----------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Key {
-    Char(char),
-    Shift,
-    Space,
-    Backspace,
-    Done,
-    Cancel,
-}
-
-impl Key {
-    fn label(&self, shift: bool) -> String {
-        match self {
-            Key::Char(c) if shift => c.to_ascii_uppercase().to_string(),
-            Key::Char(c) => c.to_string(),
-            Key::Shift => "⇧".into(),
-            Key::Space => "space".into(),
-            Key::Backspace => "⌫".into(),
-            Key::Done => "done".into(),
-            Key::Cancel => "cancel".into(),
-        }
-    }
-}
-
-fn keyboard_rows() -> Vec<Vec<Key>> {
-    let mut rows: Vec<Vec<Key>> = ["1234567890", "qwertyuiop", "asdfghjkl-", "zxcvbnm_.@"]
-        .iter()
-        .map(|row| row.chars().map(Key::Char).collect())
-        .collect();
-    rows.push(vec![
-        Key::Shift,
-        Key::Space,
-        Key::Backspace,
-        Key::Done,
-        Key::Cancel,
-    ]);
-    rows
 }
 
 // --- Navigation ---------------------------------------------------------------
@@ -120,67 +74,14 @@ pub fn handle_nav(root: &mut RootView, event: NavEvent, cx: &mut Context<RootVie
             NavEvent::Confirm | NavEvent::Back => Outcome::Close,
             _ => Outcome::None,
         },
-        Modal::WifiPassword {
-            ssid,
-            value,
-            row,
-            col,
-            shift,
-        } => {
-            let rows = keyboard_rows();
-            match event {
-                NavEvent::Up => {
-                    *row = row.saturating_sub(1);
-                    *col = (*col).min(rows[*row].len() - 1);
-                    Outcome::None
-                }
-                NavEvent::Down => {
-                    *row = (*row + 1).min(rows.len() - 1);
-                    *col = (*col).min(rows[*row].len() - 1);
-                    Outcome::None
-                }
-                NavEvent::Left => {
-                    *col = col.saturating_sub(1);
-                    Outcome::None
-                }
-                NavEvent::Right => {
-                    *col = (*col + 1).min(rows[*row].len() - 1);
-                    Outcome::None
-                }
-                NavEvent::Confirm => match rows[*row][*col] {
-                    Key::Char(c) => {
-                        value.push(if *shift { c.to_ascii_uppercase() } else { c });
-                        Outcome::None
-                    }
-                    Key::Shift => {
-                        *shift = !*shift;
-                        Outcome::None
-                    }
-                    Key::Space => {
-                        value.push(' ');
-                        Outcome::None
-                    }
-                    Key::Backspace => {
-                        value.pop();
-                        Outcome::None
-                    }
-                    Key::Done => Outcome::ConnectWifi {
-                        ssid: ssid.clone(),
-                        password: value.clone(),
-                    },
-                    Key::Cancel => Outcome::Close,
-                },
-                NavEvent::Back => {
-                    if value.pop().is_none() {
-                        Outcome::Close
-                    } else {
-                        Outcome::None
-                    }
-                }
-                NavEvent::Menu => Outcome::Close,
-                _ => Outcome::None,
-            }
-        }
+        Modal::WifiPassword { ssid, osk } => match osk.handle_nav(event) {
+            OskOutcome::None => Outcome::None,
+            OskOutcome::Commit(password) => Outcome::ConnectWifi {
+                ssid: ssid.clone(),
+                password,
+            },
+            OskOutcome::Cancel => Outcome::Close,
+        },
         Modal::UpdateLog => match event {
             NavEvent::Back => Outcome::Close,
             _ => Outcome::None,
@@ -216,16 +117,9 @@ fn close(root: &mut RootView) {
 
 /// Physical-keyboard text entry for the password modal.
 pub fn handle_key(root: &mut RootView, event: &KeyDownEvent, cx: &mut Context<RootView>) {
-    if let Some(Modal::WifiPassword { value, .. }) = root.modal.as_mut() {
-        let key = event.keystroke.key.as_str();
-        if key == "backspace" {
-            value.pop();
+    if let Some(Modal::WifiPassword { osk, .. }) = root.modal.as_mut() {
+        if osk.handle_key(event) {
             cx.notify();
-        } else if let Some(text) = &event.keystroke.key_char {
-            if text.chars().all(|c| !c.is_control()) {
-                value.push_str(text);
-                cx.notify();
-            }
         }
     }
 }
@@ -236,13 +130,7 @@ pub fn render(root: &RootView) -> impl IntoElement {
     let modal = root.modal.as_ref().expect("modal open");
     let panel = match modal {
         Modal::Confirm { title, yes, .. } => confirm_panel(title, *yes).into_any_element(),
-        Modal::WifiPassword {
-            ssid,
-            value,
-            row,
-            col,
-            shift,
-        } => wifi_panel(ssid, value, *row, *col, *shift).into_any_element(),
+        Modal::WifiPassword { ssid, osk } => wifi_panel(ssid, osk).into_any_element(),
         Modal::UpdateLog => update_panel(&root.settings.update_log).into_any_element(),
     };
     div()
@@ -272,8 +160,16 @@ fn confirm_panel(title: &str, yes: bool) -> impl IntoElement {
             .px_6()
             .py_2()
             .rounded_md()
-            .bg(if active { theme::accent_dim() } else { theme::panel_hi() })
-            .text_color(if active { theme::text() } else { theme::text_dim() })
+            .bg(if active {
+                theme::accent_dim()
+            } else {
+                theme::panel_hi()
+            })
+            .text_color(if active {
+                theme::text()
+            } else {
+                theme::text_dim()
+            })
             .child(label)
     };
     div()
@@ -292,45 +188,13 @@ fn confirm_panel(title: &str, yes: bool) -> impl IntoElement {
         )
 }
 
-fn wifi_panel(ssid: &str, value: &str, sel_row: usize, sel_col: usize, shift: bool) -> impl IntoElement {
-    let masked: String = "•".repeat(value.chars().count());
-    let rows = keyboard_rows();
+fn wifi_panel(ssid: &str, osk: &OskState) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
         .gap_3()
         .child(div().text_lg().child(format!("Password for {ssid}")))
-        .child(
-            div()
-                .px_3()
-                .py_2()
-                .rounded_md()
-                .bg(theme::bg())
-                .min_w(px(320.))
-                .child(if masked.is_empty() {
-                    "…".to_owned()
-                } else {
-                    masked
-                }),
-        )
-        .children(rows.into_iter().enumerate().map(|(r, keys)| {
-            div()
-                .flex()
-                .flex_row()
-                .gap_1()
-                .justify_center()
-                .children(keys.into_iter().enumerate().map(move |(c, key)| {
-                    let active = r == sel_row && c == sel_col;
-                    div()
-                        .px_2()
-                        .py_1()
-                        .rounded_sm()
-                        .min_w(px(28.))
-                        .text_center()
-                        .bg(if active { theme::accent_dim() } else { theme::panel_hi() })
-                        .child(key.label(shift))
-                }))
-        }))
+        .child(osk::render(osk, true))
         .child(
             div()
                 .text_sm()

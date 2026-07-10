@@ -105,9 +105,7 @@ fn parse_game_entry(path: &Path, text: &str) -> Option<Game> {
 }
 
 fn is_flatpak_export(path: &Path, exec: &str) -> bool {
-    path.components()
-        .any(|c| c.as_os_str() == "flatpak")
-        && exec.contains("flatpak run")
+    path.components().any(|c| c.as_os_str() == "flatpak") && exec.contains("flatpak run")
 }
 
 /// Icons for exported flatpaks live next to the applications dir:

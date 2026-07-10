@@ -2,8 +2,8 @@
 //! gamepad events converge on `handle_nav`), renders the tab frame.
 
 use gpui::{
-    actions, div, prelude::*, px, App, Context, FocusHandle, KeyBinding, KeyDownEvent, SharedString,
-    Window,
+    actions, div, prelude::*, px, App, Context, FocusHandle, KeyBinding, KeyDownEvent,
+    SharedString, Window,
 };
 use silverdeck_input::NavEvent;
 
@@ -77,7 +77,12 @@ impl RootView {
         this
     }
 
-    pub fn toast(&mut self, message: impl Into<SharedString>, is_error: bool, cx: &mut Context<Self>) {
+    pub fn toast(
+        &mut self,
+        message: impl Into<SharedString>,
+        is_error: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.toast = Some((message.into(), is_error));
         cx.notify();
     }
@@ -146,7 +151,9 @@ impl RootView {
                     .py_1()
                     .rounded_md()
                     .text_lg()
-                    .when(is_active, |d| d.bg(theme::panel_hi()).text_color(theme::text()))
+                    .when(is_active, |d| {
+                        d.bg(theme::panel_hi()).text_color(theme::text())
+                    })
                     .when(!is_active, |d| d.text_color(theme::text_dim()))
                     .child(tab.title())
             }))

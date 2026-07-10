@@ -34,7 +34,10 @@ pub enum LaunchSpec {
     Command(Vec<String>),
     SteamAppId(u32),
     FlatpakRef(String),
-    Heroic { runner: String, id: String },
+    Heroic {
+        runner: String,
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

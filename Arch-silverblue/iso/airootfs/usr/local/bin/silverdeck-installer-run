@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Keep the live installer alive: restart it on crash with backoff (mirrors
+# silverdeck-ui-run on the installed system).
+set -u
+
+backoff=1
+while true; do
+    systemd-cat -t silverdeck-installer /usr/bin/silverdeck-installer
+    code=$?
+    printf 'silverdeck-installer exited (%s); restarting in %ss\n' "$code" "$backoff" \
+        | systemd-cat -t silverdeck-installer -p warning
+    sleep "$backoff"
+    if [ "$backoff" -lt 30 ]; then backoff=$((backoff * 2)); fi
+done

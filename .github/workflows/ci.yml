@@ -1,0 +1,124 @@
+# SilverDeck CI. Mirrors the top-level Makefile targets so CI runs exactly
+# what a contributor runs locally:
+#   * ui     -> `make ui-check`              (fmt + clippy + tests, in the nix dev shell)
+#   * shell  -> `make -C Arch-silverblue test` (shellcheck + bats + verify-units)
+#   * iso    -> `make build-iso`             (packages + privileged Docker + mkarchiso) — default branch/dispatch only
+#   * qemu   -> tests/qemu/run.sh            (full-boot integration)                    — manual only
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      qemu_scenario:
+        description: "QEMU scenario(s) to run"
+        type: choice
+        options: [none, unattended, interactive, both]
+        default: none
+      qemu_bootloader:
+        description: "Bootloader to drive through the QEMU scenario(s)"
+        type: choice
+        options: [systemd-boot, grub]
+        default: systemd-boot
+
+# One in-flight run per ref; cancel superseded ones (e.g. force-pushes to a PR).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ui:
+    name: UI fmt + clippy + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix (provides the UI dev shell)
+        uses: DeterminateSystems/nix-installer-action@main
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            silverdeck-ui/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('silverdeck-ui/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+      - name: make ui-check
+        run: make ui-check
+
+  shell:
+    name: shellcheck + bats + verify-units
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix (provides shellcheck + bats)
+        uses: DeterminateSystems/nix-installer-action@main
+      - name: make test (Arch-silverblue)
+        run: make -C Arch-silverblue test
+
+  iso:
+    name: build ISO + checksums
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    needs: [ui, shell]
+    # Expensive (two Docker builds + a full pacman download); keep it off every
+    # PR — default branch pushes and manual runs only.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free runner disk space (mkarchiso needs ~25 GB)
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af
+          df -h /
+      - name: make build-iso (packages + ISO)
+        run: make build-iso
+      - name: Upload ISO + SHA256SUMS
+        uses: actions/upload-artifact@v4
+        with:
+          name: iso
+          path: |
+            Arch-silverblue/iso/output/*.iso
+            Arch-silverblue/iso/output/SHA256SUMS
+          if-no-files-found: error
+
+  qemu:
+    name: QEMU integration (manual)
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    # GitHub-hosted runners have no /dev/kvm, so the harness falls back to TCG
+    # emulation — far too slow for every push. Run on demand only.
+    if: github.event_name == 'workflow_dispatch' && inputs.qemu_scenario != 'none'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af
+          df -h /
+      - name: Install QEMU + OVMF firmware
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf
+      - name: Build ISO
+        run: make build-iso
+      - name: QEMU unattended (install/happy/rollback)
+        if: inputs.qemu_scenario == 'unattended' || inputs.qemu_scenario == 'both'
+        run: bash tests/qemu/run.sh --bootloader "${{ inputs.qemu_bootloader }}"
+        working-directory: Arch-silverblue
+      - name: QEMU interactive installer
+        if: inputs.qemu_scenario == 'interactive' || inputs.qemu_scenario == 'both'
+        run: bash tests/qemu/run.sh --interactive --bootloader "${{ inputs.qemu_bootloader }}"
+        working-directory: Arch-silverblue

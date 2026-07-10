@@ -28,7 +28,7 @@ SB_INSTALL_LIB=${SB_INSTALL_LIB:-/usr/local/lib/installer/install-lib.sh}
 source "$SB_INSTALL_LIB" || { echo "error: cannot load $SB_INSTALL_LIB" >&2; exit 1; }
 
 usage() {
-    printf 'Usage: %s\n\nInteractive installer for %s. Run from the live ISO as root;\nit takes no arguments and prompts for everything it needs.\n' \
+    printf 'Usage: %s [--list-disks]\n\nInteractive installer for %s. Run from the live ISO as root;\nwith no arguments it prompts for everything it needs.\n--list-disks prints installable disks as PATH|SIZE|MODEL lines and exits\n(for GUI frontends; they drive the install itself via SB_INST_UNATTENDED=1).\n' \
         "${0##*/}" "$DISTRO_NAME" >&2
 }
 
@@ -37,10 +37,13 @@ usage() {
 validate_timezone() { [[ -n "$1" && -f "/usr/share/zoneinfo/$1" ]]; }
 
 validate_locale() {
+    local supported="${SB_I18N_SUPPORTED:-/usr/share/i18n/SUPPORTED}"
     [[ -n "$1" ]] || return 1
     # If the live ISO ships glibc's SUPPORTED list, check against it; otherwise accept.
-    [[ -f /usr/share/i18n/SUPPORTED ]] || return 0
-    cut -d' ' -f1 /usr/share/i18n/SUPPORTED | grep -qxF "$1"
+    [[ -f "$supported" ]] || return 0
+    # No cut|grep pipe: under `set -o pipefail` grep -q's early exit can SIGPIPE
+    # cut (exit 141), making a matching locale "invalid" at random.
+    awk -v loc="$1" '$1 == loc { found = 1; exit } END { exit !found }' "$supported"
 }
 
 # --- Steps ----------------------------------------------------------------------------------
@@ -55,6 +58,13 @@ preflight() {
     done
     if "$FINDMNT" -no TARGET /mnt >/dev/null 2>&1; then
         die "/mnt is already mounted; unmount it first (umount -R /mnt)"
+    fi
+    if [[ "${SB_INST_UNATTENDED:-0}" == 1 ]]; then
+        # No prompts in unattended mode: tolerate slow DHCP, then fail hard so the GUI
+        # frontend can show its network screen and retry the whole run.
+        wait_network
+        check_network || die "no outbound network (pacstrap needs the Arch mirrors)"
+        return 0
     fi
     while ! check_network; do
         err "no outbound network (pacstrap needs the Arch mirrors)"
@@ -76,13 +86,21 @@ live_medium_disk() {
     fi
 }
 
-# Numbered disk menu; prints the chosen /dev path.
-select_disk() {
-    local live listing line path size model choice
-    local lines=() menu=()
+# Machine-readable list of installable disks, one 'PATH|SIZE|MODEL' line each (the live
+# medium excluded). Exposed as `--list-disks` so GUI frontends reuse this exact filter
+# instead of reimplementing it.
+list_disks() {
+    local live listing
     live=$(live_medium_disk)
     listing=$("$LSBLK" -dn -P -o PATH,TYPE,SIZE,MODEL)
-    mapfile -t lines < <(filter_disks "$listing" "$live")
+    filter_disks "$listing" "$live"
+}
+
+# Numbered disk menu; prints the chosen /dev path.
+select_disk() {
+    local line path size model choice
+    local lines=() menu=()
+    mapfile -t lines < <(list_disks)
     (( ${#lines[@]} > 0 )) || die "no installable disks found"
     for line in "${lines[@]}"; do
         IFS='|' read -r path size model <<< "$line"
@@ -146,6 +164,12 @@ gather_answers() {
         SB_INST_USER_PASSWORD=$(ask_secret user-password "Password for $SB_INST_USERNAME")
     fi
 
+    build_pkgs_from_answers
+}
+
+# Derive the pacstrap package list from the SB_INST_* answers (shared by the interactive
+# and unattended paths).
+build_pkgs_from_answers() {
     SB_INST_PKGS=("${PKGS_BASE[@]}")
     if [[ "$SB_INST_MICROCODE" != none ]]; then
         local -a ucode_pkgs
@@ -166,6 +190,58 @@ gather_answers() {
     fi
 }
 
+# Unattended answers: same SB_INST_* globals as gather_answers(), but from the environment
+# with distro.conf fallbacks. Used by GUI frontends (SB_INST_UNATTENDED=1): they collect the
+# disk, export it, and let everything else default. Validates as strictly as the prompts do.
+gather_answers_from_env() {
+    [[ -n "${SB_INST_DISK:-}" ]] || die "SB_INST_DISK is required in unattended mode"
+    local found=0 path _
+    while IFS='|' read -r path _; do
+        [[ "$path" == "$SB_INST_DISK" ]] && found=1
+    done < <(list_disks)
+    (( found )) || die "SB_INST_DISK=$SB_INST_DISK is not an installable disk (see --list-disks)"
+
+    SB_INST_HOSTNAME=${SB_INST_HOSTNAME:-$HOSTNAME}
+    validate_hostname "$SB_INST_HOSTNAME" || die "invalid hostname: $SB_INST_HOSTNAME"
+    SB_INST_TIMEZONE=${SB_INST_TIMEZONE:-$TIMEZONE}
+    validate_timezone "$SB_INST_TIMEZONE" || die "invalid timezone: $SB_INST_TIMEZONE"
+    SB_INST_LOCALE=${SB_INST_LOCALE:-$LOCALE}
+    validate_locale "$SB_INST_LOCALE" || die "invalid locale: $SB_INST_LOCALE"
+    SB_INST_KEYMAP=${SB_INST_KEYMAP:-$KEYMAP}
+    SB_INST_BOOTLOADER=${SB_INST_BOOTLOADER:-$BOOTLOADER}
+    case "$SB_INST_BOOTLOADER" in
+        systemd-boot|grub) ;;
+        *) die "invalid bootloader: $SB_INST_BOOTLOADER" ;;
+    esac
+    if [[ -z "${SB_INST_MICROCODE:-}" ]]; then
+        SB_INST_MICROCODE=$(detect_microcode "$(cat /proc/cpuinfo)")
+        SB_INST_MICROCODE=${SB_INST_MICROCODE:-none}
+    fi
+    SB_INST_FIRMWARE=${SB_INST_FIRMWARE:-yes}
+    SB_INST_NETWORK=${SB_INST_NETWORK:-networkmanager}
+    case "$SB_INST_NETWORK" in
+        none|networkd|networkmanager) ;;
+        *) die "invalid network mode: $SB_INST_NETWORK" ;;
+    esac
+
+    # Root policy: kiosk targets lock root (the session autologs into a regular user);
+    # otherwise a root password must be provided.
+    SB_INST_LOCK_ROOT=${SB_INST_LOCK_ROOT:-${INSTALL_LOCK_ROOT:-0}}
+    SB_INST_ROOT_PASSWORD=${SB_INST_ROOT_PASSWORD:-}
+    if [[ "$SB_INST_LOCK_ROOT" != 1 && -z "$SB_INST_ROOT_PASSWORD" ]]; then
+        die "SB_INST_ROOT_PASSWORD is required unless SB_INST_LOCK_ROOT=1"
+    fi
+
+    SB_INST_USERNAME=${SB_INST_USERNAME:-}
+    if [[ -n "$SB_INST_USERNAME" ]]; then
+        validate_username "$SB_INST_USERNAME" || die "invalid user name: $SB_INST_USERNAME"
+        [[ -n "${SB_INST_USER_PASSWORD:-}" ]] || die "SB_INST_USER_PASSWORD is required with SB_INST_USERNAME"
+    fi
+    SB_INST_USER_PASSWORD=${SB_INST_USER_PASSWORD:-}
+
+    build_pkgs_from_answers
+}
+
 confirm_or_abort() {
     printf '\n' >&2
     render_summary >&2
@@ -184,6 +260,11 @@ do_install() {
     # A serial-console install carries its console= options into the boot entry (headless
     # machines stay reachable; this is also what makes the QEMU test observable).
     extra_opts=$(console_opts_for_tty "$(tty 2>/dev/null || true)")
+    # Distro-wide extra kernel options (e.g. quiet/splash for a masked boot). The update
+    # engine's kernel_extra_opts() carries them into every later snapshot entry.
+    if [[ -n "${KERNEL_OPTS_EXTRA:-}" ]]; then
+        extra_opts="${extra_opts:+$extra_opts }$KERNEL_OPTS_EXTRA"
+    fi
 
     # On failure: report, unmount, and leave the user their shell (no poweroff).
     # shellcheck disable=SC2154   # LINENO is provided by bash
@@ -210,13 +291,18 @@ do_install() {
     write_fstab /mnt
     configure_target_system /mnt "$SB_INST_HOSTNAME" "$SB_INST_TIMEZONE" "$SB_INST_LOCALE" "$SB_INST_KEYMAP"
     write_os_release /mnt
+    configure_plymouth /mnt
     configure_initramfs /mnt
     install_target_tools /mnt
     install_local_repo /mnt
     append_extra_repos /mnt
     enable_network_stack /mnt "$SB_INST_NETWORK"
     enable_distro_services /mnt
-    set_root_password /mnt "$SB_INST_ROOT_PASSWORD"
+    if [[ "${SB_INST_LOCK_ROOT:-0}" == 1 ]]; then
+        lock_root_password /mnt
+    else
+        set_root_password /mnt "$SB_INST_ROOT_PASSWORD"
+    fi
     if [[ -n "$SB_INST_USERNAME" ]]; then
         create_admin_user /mnt "$SB_INST_USERNAME" "$SB_INST_USER_PASSWORD"
     fi
@@ -245,9 +331,25 @@ offer_reboot() {
 }
 
 main() {
+    if [[ "${1:-}" == --list-disks ]]; then
+        list_disks
+        exit 0
+    fi
     if (( $# > 0 )); then
         usage
         exit 2
+    fi
+    if [[ "${SB_INST_UNATTENDED:-0}" == 1 ]]; then
+        # Unattended mode for GUI frontends: answers come from SB_INST_* env vars
+        # (gather_answers_from_env), progress from the SILVERBLUE-INSTALL-* markers.
+        # The frontend owns the reboot; SB_INST_CONFIRM=ERASE is its erase gate.
+        printf '%s installer (unattended)\n' "$DISTRO_NAME" >&2
+        preflight
+        gather_answers_from_env
+        [[ "${SB_INST_CONFIRM:-}" == ERASE ]] \
+            || die "refusing to install: set SB_INST_CONFIRM=ERASE"
+        do_install
+        return 0
     fi
     printf '%s installer\n' "$DISTRO_NAME" >&2
     preflight

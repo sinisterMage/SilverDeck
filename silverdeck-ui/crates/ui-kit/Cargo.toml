@@ -1,0 +1,9 @@
+[package]
+name = "silverdeck-ui-kit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gpui.workspace = true
+silverdeck-input.workspace = true

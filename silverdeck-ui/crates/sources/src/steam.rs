@@ -74,7 +74,9 @@ impl GameSource for SteamSource {
                         continue;
                     }
                 };
-                if NON_GAME_APPIDS.contains(&app.app_id) || app.name.as_deref().is_none_or(|n| n.starts_with("Proton")) {
+                if NON_GAME_APPIDS.contains(&app.app_id)
+                    || app.name.as_deref().is_none_or(|n| n.starts_with("Proton"))
+                {
                     continue;
                 }
                 let mut game = Game::steam(app.app_id, app.name.clone().unwrap_or_default());

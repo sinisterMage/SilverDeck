@@ -1,34 +1,48 @@
 # SilverDeck
 
 A gaming-console Linux distribution: boot straight into a controller-first,
-fullscreen console UI — no desktop.
+fullscreen console UI — no desktop, no jargon. Atomic OS updates that roll
+back by themselves if they break, a GUI installer that asks exactly two
+things (which drive, are you sure), and a splash-masked boot from power-on to
+UI.
 
-SilverDeck is built from two parts:
+**[Documentation](docs/index.md)** ·
+[Install](docs/installation.md) ·
+[User guide](docs/user-guide.md) ·
+[Architecture](docs/architecture.md) ·
+[Building](docs/building.md)
+
+## How it fits together
 
 - **`Arch-silverblue/`** — our fork of the
   [Arch Silverblue](https://github.com/sinisterMage/Arch-silverblue) atomic
-  distro toolkit (Btrfs-snapshot updates with automatic rollback, archiso
-  image build, QEMU test harness). SilverDeck is a derivative per its
-  fork-and-own model: `config/distro.conf` carries the SilverDeck identity and
-  package set.
-- **`silverdeck-ui/`** — the console UI, a Rust workspace built on
-  [GPUI](https://www.gpui.rs/) (pinned `=0.2.2`). Launcher-agnostic game
-  library (Steam, Heroic/Epic/GOG, Flatpak, desktop entries), a curated
-  Flathub game store, and settings (Wi-Fi, audio, atomic OS updates, power) —
-  all fully navigable with a gamepad.
+  distro toolkit (Btrfs-snapshot updates with automatic rollback, the shared
+  bash install engine, archiso image build, QEMU test harness). SilverDeck is
+  a derivative per its fork-and-own model: `config/distro.conf` carries the
+  SilverDeck identity, package set, and boot policy.
+- **`silverdeck-ui/`** — the Rust workspace built on
+  [GPUI](https://www.gpui.rs/) (pinned `=0.2.2`): the console shell
+  (`silverdeck-ui`: Steam/Heroic/Flatpak library, curated Flathub store,
+  settings) and the GUI installer (`silverdeck-installer`), sharing one
+  palette, one input model (gamepad + keyboard), one code pattern.
+- **`packaging/`** — pacman packages (`silverdeck-ui`, `-installer`,
+  `-session`, `-plymouth`) built in an Arch container into a local repo the
+  ISO bakes in.
 
-The installed system boots: systemd → greetd autologin (user `deck`) → sway
-(kiosk config) → `silverdeck-ui` fullscreen. Games launch as sway clients,
-optionally wrapped in gamescope; when a game exits, focus returns to the UI.
+Boot chain, installed: systemd-boot (menu hidden) → plymouth splash → greetd
+autologin (`deck`) → sway kiosk → `silverdeck-ui`. The live ISO boots the
+same kiosk into the installer instead. Details in
+[docs/architecture.md](docs/architecture.md).
 
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| `silverdeck-ui/` | GPUI console UI workspace (see its crates/ tree) |
+| `silverdeck-ui/` | GPUI workspace: console shell, GUI installer, shared ui-kit, system crates |
 | `packaging/` | PKGBUILDs + Arch builder container + local-repo build script |
-| `packaging/silverdeck-session/` | Kiosk session package: greetd/sway config, udev controller rules, polkit rules, firstboot + update units, store allowlist |
 | `Arch-silverblue/` | Distro toolkit fork (edited in place, additive only) |
+| `docs/` | User + developer documentation |
+| `.github/workflows/` | CI (checks, ISO) and release pipelines |
 
 ## Building
 
@@ -36,25 +50,31 @@ Development host expectation: Nix (dev shells) + Docker (Arch tooling). The
 UI iterates on the host without touching the image:
 
 ```sh
-make ui-check          # clippy + tests
-make ui-run            # run the UI in your Wayland session
-make ui-run-kiosk      # nested sway kiosk (fullscreen/IPC behavior)
-make ui-run-lavapipe   # software-Vulkan path (what QEMU uses)
+make ui-check            # fmt + clippy + tests
+make ui-run              # console shell in your Wayland session
+make installer-run       # GUI installer against a fake engine (no root, no disks)
+make ui-run-kiosk        # nested sway kiosk (fullscreen/IPC behavior)
 ```
 
 Image pipeline (everything Arch-side runs in Docker):
 
 ```sh
-make ui-package        # build silverdeck-ui/-session pacman pkgs -> local repo
-make build-iso         # archiso build -> Arch-silverblue/iso/output/*.iso
-make test-qemu         # install/update/rollback + kiosk session asserts
-make test              # upstream lint+bats + ui-check
+make ui-package          # build the pacman packages -> local repo
+make build-iso           # archiso build -> Arch-silverblue/iso/output/*.iso
+make test-qemu           # install/update/rollback asserts in QEMU
+make test                # ui-check + toolkit lint/bats/verify-units
 ```
+
+More recipes (watching the installer in QEMU, logo regen, CI notes):
+[docs/building.md](docs/building.md).
 
 ## Updates
 
 OS updates are atomic (Btrfs snapshot + boot-count rollback), driven by
-`silverdeck-update` — triggered from the UI's Settings tab via a root
-systemd unit. The UI/session packages ship in a local pacman repo baked into
-the image at `/var/lib/silverdeck/repo`; point the `[silverdeck]` repo at an
-https server later to ship UI updates out-of-band.
+`silverdeck-update` from the UI's Settings tab. If a new snapshot can't bring
+the console up, the bootloader falls back to the previous good one — no user
+action. See [docs/updates-and-rollback.md](docs/updates-and-rollback.md).
+
+## License
+
+GPL-3.0 (see [LICENSE](LICENSE)).

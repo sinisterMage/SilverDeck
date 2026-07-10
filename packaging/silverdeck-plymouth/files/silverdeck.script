@@ -1,0 +1,84 @@
+# SilverDeck boot splash (plymouth script plugin).
+#
+# Near-black background (#0b0f14), the spark centered with the wordmark, and a
+# thin accent (#38bdf8) pulse bar underneath — the same palette as the console
+# UI, so plymouth → greetd → sway → silverdeck-ui reads as one dark surface.
+# The pulse deliberately ignores boot progress (systemd progress is too bursty
+# to look calm); it just says "alive".
+
+Window.SetBackgroundTopColor(0.043, 0.059, 0.078);
+Window.SetBackgroundBottomColor(0.043, 0.059, 0.078);
+
+logo.image = Image("logo.png");
+logo.x = Window.GetX() + Window.GetWidth() / 2 - logo.image.GetWidth() / 2;
+logo.y = Window.GetY() + Window.GetHeight() / 2 - logo.image.GetHeight() / 2 - 60;
+logo.sprite = Sprite(logo.image);
+logo.sprite.SetPosition(logo.x, logo.y, 100);
+
+title.image = Image.Text("SilverDeck", 0.898, 0.918, 0.941, 1, "DejaVu Sans Bold 22");
+title.x = Window.GetX() + Window.GetWidth() / 2 - title.image.GetWidth() / 2;
+title.y = logo.y + logo.image.GetHeight() + 28;
+title.sprite = Sprite(title.image);
+title.sprite.SetPosition(title.x, title.y, 100);
+
+# --- Pulse bar --------------------------------------------------------------
+
+bar.width = 360;
+bar.height = 4;
+bar.segment = 90;
+bar.x = Window.GetX() + Window.GetWidth() / 2 - bar.width / 2;
+bar.y = title.y + title.image.GetHeight() + 40;
+
+bar.bg.sprite = Sprite(Image("bar-bg.png").Scale(bar.width, bar.height));
+bar.bg.sprite.SetPosition(bar.x, bar.y, 90);
+bar.fg.sprite = Sprite(Image("bar-fg.png").Scale(bar.segment, bar.height));
+bar.fg.sprite.SetPosition(bar.x, bar.y, 95);
+
+pulse.counter = 0;
+
+fun refresh_callback() {
+    pulse.counter = pulse.counter + 2;
+    span = bar.width - bar.segment;
+    t = pulse.counter % (span * 2);
+    if (t >= span)
+        t = span * 2 - t;
+    bar.fg.sprite.SetX(bar.x + t);
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+# --- Status / prompt plumbing (defensive; SilverDeck ships no LUKS) ----------
+
+message.sprite = Sprite();
+message.sprite.SetPosition(Window.GetX() + 20, Window.GetY() + Window.GetHeight() - 40, 110);
+
+fun message_callback(text) {
+    message.image = Image.Text(text, 0.545, 0.596, 0.647, 1, "DejaVu Sans 12");
+    message.sprite.SetImage(message.image);
+}
+Plymouth.SetMessageFunction(message_callback);
+
+prompt.sprite = Sprite();
+
+fun display_password_callback(prompt_text, bullets) {
+    dots = "";
+    for (i = 0; i < bullets; i++)
+        dots += "*";
+    prompt.image = Image.Text(prompt_text + " " + dots, 0.898, 0.918, 0.941, 1, "DejaVu Sans 14");
+    prompt.sprite.SetImage(prompt.image);
+    prompt.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - prompt.image.GetWidth() / 2,
+                              bar.y + 30, 110);
+}
+Plymouth.SetDisplayPasswordFunction(display_password_callback);
+
+fun display_question_callback(prompt_text, entry) {
+    prompt.image = Image.Text(prompt_text + " " + entry, 0.898, 0.918, 0.941, 1, "DejaVu Sans 14");
+    prompt.sprite.SetImage(prompt.image);
+    prompt.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - prompt.image.GetWidth() / 2,
+                              bar.y + 30, 110);
+}
+Plymouth.SetDisplayQuestionFunction(display_question_callback);
+
+fun display_normal_callback() {
+    prompt.sprite.SetImage(Image.Text("", 0, 0, 0, 0));
+}
+Plymouth.SetDisplayNormalFunction(display_normal_callback);

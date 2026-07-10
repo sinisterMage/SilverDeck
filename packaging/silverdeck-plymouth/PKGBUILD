@@ -1,0 +1,22 @@
+# SilverDeck plymouth boot-splash theme. Pure file payload; files live in
+# files/ next to this PKGBUILD (copied into the build container by
+# build-repo.sh). The installer selects the theme via PLYMOUTH_THEME in
+# config/distro.conf (install-lib.sh's configure_plymouth).
+pkgname=silverdeck-plymouth
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="SilverDeck plymouth boot splash theme"
+arch=(any)
+url="https://github.com/sinisterMage/SilverDeck"
+license=(MIT)
+depends=(plymouth)
+
+package() {
+    local files="$startdir/files"
+    local theme="$pkgdir/usr/share/plymouth/themes/silverdeck"
+    install -Dm0644 "$files/silverdeck.plymouth" "$theme/silverdeck.plymouth"
+    install -Dm0644 "$files/silverdeck.script" "$theme/silverdeck.script"
+    install -Dm0644 "$files/logo.png" "$theme/logo.png"
+    install -Dm0644 "$files/bar-bg.png" "$theme/bar-bg.png"
+    install -Dm0644 "$files/bar-fg.png" "$theme/bar-fg.png"
+}

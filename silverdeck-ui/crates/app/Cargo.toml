@@ -20,3 +20,4 @@ silverdeck-launch.workspace = true
 silverdeck-sources.workspace = true
 silverdeck-store.workspace = true
 silverdeck-system.workspace = true
+silverdeck-ui-kit.workspace = true

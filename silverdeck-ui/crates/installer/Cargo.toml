@@ -1,0 +1,19 @@
+[package]
+name = "silverdeck-installer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "silverdeck-installer"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-channel.workspace = true
+env_logger.workspace = true
+gpui.workspace = true
+log.workspace = true
+silverdeck-input.workspace = true
+silverdeck-system.workspace = true
+silverdeck-ui-kit.workspace = true

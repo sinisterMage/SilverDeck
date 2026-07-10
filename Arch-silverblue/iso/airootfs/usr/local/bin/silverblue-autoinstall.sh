@@ -99,6 +99,7 @@ main() {
     # Test appliance: no root password — the harness drives an autologin shell.
     arch-chroot /mnt passwd -d root
 
+    configure_plymouth /mnt
     configure_initramfs /mnt
 
     # Serial-console autologin on the target so the harness can drive it.
@@ -120,11 +121,17 @@ EOF
     enable_distro_services /mnt
 
     # --- Bootloader ----------------------------------------------------------------------
+    # The serial console comes first; KERNEL_OPTS_EXTRA (quiet/splash on SilverDeck) rides
+    # along so the QEMU-installed target exercises the exact boot the GUI installer produces.
+    local extra_opts="console=ttyS0,115200 console=tty0"
+    if [[ -n "${KERNEL_OPTS_EXTRA:-}" ]]; then
+        extra_opts="$extra_opts $KERNEL_OPTS_EXTRA"
+    fi
     pool_uuid=$(blkid -s UUID -o value "$rootpart")
     if [[ "$bootloader" == grub ]]; then
-        install_grub /mnt "$snap" "$pool_uuid" "console=ttyS0,115200 console=tty0"
+        install_grub /mnt "$snap" "$pool_uuid" "$extra_opts"
     else
-        install_sdboot /mnt "$snap" "$pool_uuid" "console=ttyS0,115200 console=tty0"
+        install_sdboot /mnt "$snap" "$pool_uuid" "$extra_opts"
     fi
 
     sync

@@ -4,10 +4,12 @@ members = [
     "crates/app",
     "crates/core",
     "crates/input",
+    "crates/installer",
     "crates/launch",
     "crates/sources",
     "crates/store",
     "crates/system",
+    "crates/ui-kit",
 ]
 
 [workspace.package]
@@ -23,6 +25,7 @@ silverdeck-launch = { path = "crates/launch" }
 silverdeck-sources = { path = "crates/sources" }
 silverdeck-store = { path = "crates/store" }
 silverdeck-system = { path = "crates/system" }
+silverdeck-ui-kit = { path = "crates/ui-kit" }
 
 # Pinned exactly per the SilverDeck plan; bump deliberately, never implicitly.
 gpui = "=0.2.2"

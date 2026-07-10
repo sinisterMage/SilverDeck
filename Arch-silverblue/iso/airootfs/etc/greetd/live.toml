@@ -1,0 +1,14 @@
+# Live-ISO kiosk: boot straight into the SilverDeck GUI installer.
+# Root because the install engine partitions disks and pacstraps; the live
+# environment is single-purpose and never persists. Both sessions point at
+# the same command so the kiosk re-enters if the session ever exits.
+[terminal]
+vt = 1
+
+[initial_session]
+command = "silverdeck-live-session"
+user = "root"
+
+[default_session]
+command = "silverdeck-live-session"
+user = "root"

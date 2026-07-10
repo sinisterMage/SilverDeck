@@ -40,8 +40,7 @@ pub fn load_catalog(_root: &mut RootView, cx: &mut Context<RootView>) {
         let loaded = background
             .spawn(async move {
                 let catalog = StoreCatalog::load_default()?;
-                let installed =
-                    silverdeck_store::installed_apps(&RUNNER).unwrap_or_default();
+                let installed = silverdeck_store::installed_apps(&RUNNER).unwrap_or_default();
                 anyhow::Ok((catalog, installed))
             })
             .await;
@@ -230,9 +229,7 @@ pub fn begin_uninstall(_root: &mut RootView, app_id: String, cx: &mut Context<Ro
     let background = cx.background_executor().clone();
     cx.spawn(async move |this, cx| {
         let result = background
-            .spawn(async move {
-                silverdeck_store::uninstall(&RUNNER, &app_id).map(|()| app_id)
-            })
+            .spawn(async move { silverdeck_store::uninstall(&RUNNER, &app_id).map(|()| app_id) })
             .await;
         this.update(cx, |root, cx| match result {
             Ok(app_id) => {
@@ -302,15 +299,24 @@ pub fn render(root: &RootView, _cx: &mut Context<RootView>) -> impl IntoElement 
         .into_any_element()
 }
 
-fn row(app: &StoreApp, selected: bool, show_category: bool, store: &StoreState) -> impl IntoElement {
+fn row(
+    app: &StoreApp,
+    selected: bool,
+    show_category: bool,
+    store: &StoreState,
+) -> impl IntoElement {
     let status = if let Some(percent) = store.installing.get(&app.app_id) {
         div()
             .text_color(theme::accent())
             .child(format!("installing {percent}%"))
     } else if store.installed.contains(&app.app_id) {
-        div().text_color(theme::ok()).child("installed ✓".to_string())
+        div()
+            .text_color(theme::ok())
+            .child("installed ✓".to_string())
     } else {
-        div().text_color(theme::text_dim()).child("A to install".to_string())
+        div()
+            .text_color(theme::text_dim())
+            .child("A to install".to_string())
     };
 
     let icon = match &app.icon {
@@ -347,7 +353,11 @@ fn row(app: &StoreApp, selected: bool, show_category: bool, store: &StoreState) 
                 .px_3()
                 .py_2()
                 .rounded_md()
-                .bg(if selected { theme::panel_hi() } else { theme::bg() })
+                .bg(if selected {
+                    theme::panel_hi()
+                } else {
+                    theme::bg()
+                })
                 .child(icon)
                 .child(
                     div()

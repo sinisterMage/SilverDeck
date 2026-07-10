@@ -327,6 +327,22 @@ configure_initramfs() {
     "$ARCH_CHROOT" "$mnt" mkinitcpio -P
 }
 
+# Add plymouth to the target's initramfs hooks and select the distro theme
+# (PLYMOUTH_THEME in distro.conf). No-op when the target does not ship plymouth, so
+# stock builds are unaffected. Must run before configure_initramfs: the plymouth
+# mkinitcpio hook bakes the selected theme into the image, and configure_initramfs
+# does the single mkinitcpio -P rebuild for both changes.
+configure_plymouth() {
+    local mnt=$1
+    [[ -x "$mnt/usr/bin/plymouth-set-default-theme" ]] || return 0
+    if ! grep -Eq '^HOOKS=.*[( ]plymouth[ )]' "$mnt/etc/mkinitcpio.conf"; then
+        sed -i -E 's/^(HOOKS=\(.*\budev\b)/\1 plymouth/' "$mnt/etc/mkinitcpio.conf"
+    fi
+    if [[ -n "${PLYMOUTH_THEME:-}" ]]; then
+        "$ARCH_CHROOT" "$mnt" plymouth-set-default-theme "$PLYMOUTH_THEME"
+    fi
+}
+
 # Copy the distro tools (already renamed/rendered in the ISO by build.sh) into the target
 # and enable the post-boot health check.
 install_target_tools() {
@@ -406,6 +422,14 @@ set_root_password() {
     printf 'root:%s\n' "$password" | "$ARCH_CHROOT" "$mnt" chpasswd
 }
 
+# Lock the root account (no password logins). Used by unattended installs on kiosk
+# targets where the session autologs into a regular user and admin work happens via
+# sudo or a recovery environment.
+lock_root_password() {
+    local mnt=$1
+    "$ARCH_CHROOT" "$mnt" passwd -l root
+}
+
 # Create a wheel-group admin user with sudo access (the frontend adds the sudo package to
 # the pacstrap list when a user is requested).
 create_admin_user() {
@@ -463,8 +487,10 @@ install_sdboot() {
     cp "$mnt/boot/initramfs-linux.img" "$efi/$ESP_SUBDIR/$snap/"
     # No explicit default= : systemd-boot then selects the newest-version entry, which is how
     # the update engine makes a freshly registered root boot next without touching the default.
+    # SDBOOT_TIMEOUT=0 (distro.conf) hides the menu for a console-style boot; holding a key
+    # during firmware handoff still brings it up, and boot-counting keeps demoting bad entries.
     cat > "$efi/loader/loader.conf" <<EOF
-timeout 3
+timeout ${SDBOOT_TIMEOUT:-3}
 console-mode max
 EOF
     {
@@ -503,7 +529,7 @@ if [ -n "\${next_entry}" ]; then
     set default="\${next_entry}"; set next_entry=; save_env --file \${prefix}/grubenv next_entry
     set recordfail=1; save_env --file \${prefix}/grubenv recordfail
 fi
-if [ "\${recordfail}" = 1 ]; then set timeout=10; else set timeout=3; fi
+if [ "\${recordfail}" = 1 ]; then set timeout=10; else set timeout=${GRUB_TIMEOUT:-3}; fi
 menuentry '$DISTRO_NAME (initial) $snap' --id $snap {
     insmod btrfs
     insmod part_gpt

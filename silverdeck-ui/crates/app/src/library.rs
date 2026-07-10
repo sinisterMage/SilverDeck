@@ -154,7 +154,9 @@ fn on_session_event(root: &mut RootView, event: SessionEvent, cx: &mut Context<R
         SessionEvent::Exited { success } => {
             let title = root.library.session.take();
             if !success {
-                let name = title.map(|t| t.to_string()).unwrap_or_else(|| "game".into());
+                let name = title
+                    .map(|t| t.to_string())
+                    .unwrap_or_else(|| "game".into());
                 root.toast(format!("{name} exited with an error"), true, cx);
             }
         }
@@ -266,7 +268,11 @@ fn tile(game: &Game, selected: bool) -> impl IntoElement {
                 .text_sm()
                 .child(
                     div()
-                        .text_color(if selected { theme::text() } else { theme::text_dim() })
+                        .text_color(if selected {
+                            theme::text()
+                        } else {
+                            theme::text_dim()
+                        })
                         .child(game.title.clone()),
                 )
                 .child(

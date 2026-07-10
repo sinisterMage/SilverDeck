@@ -136,7 +136,8 @@ main() {
     render < "$REPO/src/init/silverblue-rollback.service"  > "$A/usr/lib/systemd/system/${UNIT_PREFIX}-rollback.service"
     render < "$REPO/src/init/silverblue-rollback.target"   > "$A/usr/lib/systemd/system/${UNIT_PREFIX}-rollback.target"
     render < "$REPO/src/init/silverblue-watchdog.conf"     > "$A/etc/systemd/system.conf.d/${UNIT_PREFIX}-watchdog.conf"
-    chmod 0755 "$A/usr/local/bin/silverblue-autoinstall.sh"
+    chmod 0755 "$A/usr/local/bin/silverblue-autoinstall.sh" \
+        "$A/usr/local/bin/silverdeck-live-session" "$A/usr/local/bin/silverdeck-installer-run"
 
     # The autoinstaller reads config/distro.conf at install time; ship it (+ the os-release
     # template) at a fixed, id-independent path it can always find.
@@ -154,6 +155,8 @@ main() {
         printf '  ["%s/%s-mark-good.sh"]="0:0:755"\n'   "$LIB_DIR" "$UNIT_PREFIX"
         printf '  ["%s/%s-rollback.sh"]="0:0:755"\n'    "$LIB_DIR" "$UNIT_PREFIX"
         printf '  ["/usr/local/bin/silverblue-autoinstall.sh"]="0:0:755"\n'
+        printf '  ["/usr/local/bin/silverdeck-live-session"]="0:0:755"\n'
+        printf '  ["/usr/local/bin/silverdeck-installer-run"]="0:0:755"\n'
     } > "$fp"
     sed -i "/^file_permissions=(/r $fp" "$PROFILE/profiledef.sh"
     rm -f "$fp"
@@ -191,6 +194,55 @@ main() {
         printf '[build] PKGS_BASE references %s-* packages but %s is missing (build it first)\n' \
             "$DISTRO_ID" "$localrepo" >&2
         exit 1
+    fi
+
+    # --- Live GUI installer session (LIVE_GUI_SESSION=1 in distro.conf) -------------------
+    # Boots the live ISO into greetd -> sway -> the GUI installer. The session
+    # configs ship in iso/airootfs (inert without these packages/symlinks).
+    if [[ "${LIVE_GUI_SESSION:-0}" == 1 ]]; then
+        log "Enabling the live GUI installer session"
+        if [[ ! -d "$localrepo" ]]; then
+            printf '[build] LIVE_GUI_SESSION=1 needs the derivative repo at %s (build it first)\n' \
+                "$localrepo" >&2
+            exit 1
+        fi
+        # mkarchiso's pacstrap resolves packages against the profile pacman.conf on the
+        # BUILD side, and the live system reuses that file at runtime — so register the
+        # baked repo once, at a path that exists in both worlds: stage a copy at
+        # /opt/${DISTRO_ID}/repo in the build container (the airootfs bake above already
+        # put it there for the live system).
+        mkdir -p "/opt/${DISTRO_ID}"
+        rm -rf "/opt/${DISTRO_ID}/repo"
+        cp -a "$localrepo" "/opt/${DISTRO_ID}/repo"
+        if ! grep -qxF "[${DISTRO_ID}]" "$PROFILE/pacman.conf"; then
+            printf '\n[%s]\nSigLevel = Optional TrustAll\nServer = file:///opt/%s/repo\n' \
+                "$DISTRO_ID" "$DISTRO_ID" >> "$PROFILE/pacman.conf"
+        fi
+        # GUI session packages (greetd/sway/installer/...) on the live medium.
+        printf '%s\n' "${PKGS_ISO_GUI[@]}" >> "$PROFILE/packages.x86_64"
+        # Boot to the kiosk: graphical.target, greetd, NetworkManager. Drop releng's
+        # iwd/systemd-networkd enablement so only one stack manages the network (the
+        # symlink names track upstream releng; rm -f keeps this tolerant of drift).
+        ln -sf /usr/lib/systemd/system/graphical.target "$A/etc/systemd/system/default.target"
+        mkdir -p "$A/etc/systemd/system/graphical.target.wants" \
+                 "$A/etc/systemd/system/multi-user.target.wants" \
+                 "$A/etc/systemd/system/getty.target.wants"
+        ln -sf /usr/lib/systemd/system/greetd.service \
+            "$A/etc/systemd/system/graphical.target.wants/greetd.service"
+        ln -sf /usr/lib/systemd/system/NetworkManager.service \
+            "$A/etc/systemd/system/multi-user.target.wants/NetworkManager.service"
+        rm -f "$A/etc/systemd/system/multi-user.target.wants/iwd.service" \
+              "$A/etc/systemd/system/multi-user.target.wants/systemd-networkd.service" \
+              "$A/etc/systemd/system/network-online.target.wants/systemd-networkd-wait-online.service" \
+              "$A/etc/systemd/system/sockets.target.wants/systemd-networkd.socket" \
+              "$A/etc/systemd/system/dbus-org.freedesktop.network1.service"
+        # A console survives on VT2 (greetd owns VT1; serial getty is untouched, so the
+        # QEMU harness contract holds).
+        ln -sf /usr/lib/systemd/system/getty@.service \
+            "$A/etc/systemd/system/getty.target.wants/getty@tty2.service"
+        # Live greeting reflecting the GUI-first flow.
+        printf 'Welcome to %s live.\n\nThe graphical installer runs on the display (VT1).\nThis console: text installer via %s-install, or just look around.\n\n' \
+            "$DISTRO_NAME" "$BIN_PREFIX" > "$A/etc/motd"
     fi
 
     # --- Extra packages needed by the autoinstaller ---------------------------------------

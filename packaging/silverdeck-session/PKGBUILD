@@ -19,6 +19,8 @@ package() {
     install -Dm0644 "$files/greetd-config.toml" "$pkgdir/etc/greetd/silverdeck.toml"
     install -Dm0644 "$files/greetd-dropin.conf" \
         "$pkgdir/usr/lib/systemd/system/greetd.service.d/silverdeck.conf"
+    install -Dm0644 "$files/greetd-plymouth.conf" \
+        "$pkgdir/usr/lib/systemd/system/greetd.service.d/plymouth.conf"
     install -Dm0755 "$files/silverdeck-session" "$pkgdir/usr/bin/silverdeck-session"
     install -Dm0755 "$files/silverdeck-ui-run" "$pkgdir/usr/bin/silverdeck-ui-run"
     install -Dm0644 "$files/sway.config" "$pkgdir/etc/silverdeck/sway.config"

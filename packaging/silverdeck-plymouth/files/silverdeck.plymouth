@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=SilverDeck
+Description=SilverDeck boot splash: dark background, spark, accent pulse
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/silverdeck
+ScriptFile=/usr/share/plymouth/themes/silverdeck/silverdeck.script

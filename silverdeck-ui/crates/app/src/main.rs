@@ -10,7 +10,10 @@ mod modal;
 mod root;
 mod settings;
 mod store_view;
-mod theme;
+
+// The palette lives in the shared ui-kit (also used by the installer); keep the
+// crate-local `crate::theme` path everything renders through.
+pub(crate) use silverdeck_ui_kit::theme;
 
 use gpui::{prelude::*, px, size, App, Application, Bounds, WindowBounds, WindowOptions};
 use root::RootView;

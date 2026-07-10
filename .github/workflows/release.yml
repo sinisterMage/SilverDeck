@@ -1,0 +1,40 @@
+# SilverDeck releases: push a v* tag, get a GitHub Release with the ISO,
+# checksums, and the SilverDeck pacman packages.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build ISO + publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free runner disk space (mkarchiso needs ~25 GB)
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af
+          df -h /
+      - name: make build-iso (packages + ISO)
+        run: make build-iso
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes \
+              --title "SilverDeck $GITHUB_REF_NAME"
+          gh release upload "$GITHUB_REF_NAME" --clobber \
+            Arch-silverblue/iso/output/*.iso \
+            Arch-silverblue/iso/output/SHA256SUMS \
+            Arch-silverblue/iso/local-repo/*.pkg.tar.zst

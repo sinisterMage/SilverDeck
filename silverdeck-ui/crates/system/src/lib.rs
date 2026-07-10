@@ -76,9 +76,9 @@ impl Network<'_> {
     /// Join a network. `password: None` for open/known networks.
     pub fn connect(&self, ssid: &str, password: Option<&str>) -> anyhow::Result<()> {
         match password {
-            Some(pw) => self.0.run(&[
-                "nmcli", "device", "wifi", "connect", ssid, "password", pw,
-            ])?,
+            Some(pw) => self
+                .0
+                .run(&["nmcli", "device", "wifi", "connect", ssid, "password", pw])?,
             None => self.0.run(&["nmcli", "device", "wifi", "connect", ssid])?,
         };
         Ok(())
@@ -136,11 +136,7 @@ fn parse_wifi_list(out: &str) -> Vec<WifiNetwork> {
             None => networks.push(network),
         }
     }
-    networks.sort_by(|a, b| {
-        b.connected
-            .cmp(&a.connected)
-            .then(b.signal.cmp(&a.signal))
-    });
+    networks.sort_by(|a, b| b.connected.cmp(&a.connected).then(b.signal.cmp(&a.signal)));
     networks
 }
 
@@ -171,7 +167,9 @@ pub struct Audio<'a>(pub &'a dyn CommandRunner);
 impl Audio<'_> {
     /// Current default-sink volume as 0..=100 (None while muted).
     pub fn volume(&self) -> anyhow::Result<(u8, bool)> {
-        let out = self.0.run(&["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"])?;
+        let out = self
+            .0
+            .run(&["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"])?;
         parse_wpctl_volume(&out).context("unparseable wpctl output")
     }
 
@@ -240,9 +238,7 @@ impl Updates<'_> {
 
     pub fn state(&self) -> UpdateState {
         match self.0.run(&["systemctl", "is-active", UPDATE_UNIT]) {
-            Ok(out) if out.trim() == "activating" || out.trim() == "active" => {
-                UpdateState::Running
-            }
+            Ok(out) if out.trim() == "activating" || out.trim() == "active" => UpdateState::Running,
             Ok(_) => UpdateState::Idle,
             // is-active exits non-zero for inactive AND failed; disambiguate.
             Err(_) => match self.0.run(&["systemctl", "is-failed", UPDATE_UNIT]) {
@@ -366,14 +362,20 @@ mod tests {
     #[test]
     fn parses_wpctl_volume() {
         assert_eq!(parse_wpctl_volume("Volume: 0.55\n"), Some((55, false)));
-        assert_eq!(parse_wpctl_volume("Volume: 1.00 [MUTED]\n"), Some((100, true)));
+        assert_eq!(
+            parse_wpctl_volume("Volume: 1.00 [MUTED]\n"),
+            Some((100, true))
+        );
         assert_eq!(parse_wpctl_volume("nonsense"), None);
     }
 
     #[test]
     fn wifi_connect_passes_password() {
-        let runner = FakeRunner::new().expect(&["nmcli", "device", "wifi", "connect"], Ok(String::new()));
-        Network(&runner).connect("HomeNet", Some("hunter2")).unwrap();
+        let runner =
+            FakeRunner::new().expect(&["nmcli", "device", "wifi", "connect"], Ok(String::new()));
+        Network(&runner)
+            .connect("HomeNet", Some("hunter2"))
+            .unwrap();
         let calls = runner.calls.lock().unwrap();
         assert_eq!(
             calls[0],
@@ -384,7 +386,10 @@ mod tests {
     #[test]
     fn update_state_disambiguates_failed() {
         let runner = FakeRunner::new()
-            .expect(&["systemctl", "is-active"], Err(anyhow::anyhow!("inactive")))
+            .expect(
+                &["systemctl", "is-active"],
+                Err(anyhow::anyhow!("inactive")),
+            )
             .expect(&["systemctl", "is-failed"], Ok("failed\n".into()));
         assert_eq!(Updates(&runner).state(), UpdateState::Failed);
     }

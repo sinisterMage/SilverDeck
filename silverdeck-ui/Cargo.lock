@@ -5158,6 +5158,7 @@ dependencies = [
  "silverdeck-sources",
  "silverdeck-store",
  "silverdeck-system",
+ "silverdeck-ui-kit",
 ]
 
 [[package]]
@@ -5175,6 +5176,20 @@ dependencies = [
  "async-channel 2.5.0",
  "gilrs",
  "log",
+]
+
+[[package]]
+name = "silverdeck-installer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel 2.5.0",
+ "env_logger",
+ "gpui",
+ "log",
+ "silverdeck-input",
+ "silverdeck-system",
+ "silverdeck-ui-kit",
 ]
 
 [[package]]
@@ -5225,6 +5240,14 @@ dependencies = [
  "anyhow",
  "log",
  "tempfile",
+]
+
+[[package]]
+name = "silverdeck-ui-kit"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "silverdeck-input",
 ]
 
 [[package]]

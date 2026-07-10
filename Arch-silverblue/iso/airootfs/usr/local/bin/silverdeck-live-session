@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Live-ISO installer session entry point (run by greetd as root).
+# Mirrors the installed system's silverdeck-session: VMs and machines without
+# a render node fall back to software rendering (sway composites with pixman,
+# the installer renders on lavapipe/vulkan-swrast).
+set -u
+
+export XDG_CURRENT_DESKTOP=sway
+export XDG_SESSION_TYPE=wayland
+
+if ! ls /dev/dri/renderD* >/dev/null 2>&1 \
+    || systemd-detect-virt --vm --quiet \
+    || grep -qw silverdeck.vm /proc/cmdline; then
+    export WLR_RENDERER=pixman
+    export WLR_NO_HARDWARE_CURSORS=1
+fi
+
+exec systemd-cat -t silverdeck-live-session sway --config /etc/silverdeck/live-sway.config

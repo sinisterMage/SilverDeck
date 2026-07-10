@@ -25,7 +25,7 @@ docker run --rm \
     -v "$OUT:/out" \
     -v silverdeck-cargo:/home/builder/.cargo \
     "$IMAGE" bash -ec '
-        for pkg in silverdeck-ui silverdeck-session; do
+        for pkg in silverdeck-ui silverdeck-installer silverdeck-session silverdeck-plymouth; do
             cp -r "/src/packaging/$pkg" "/tmp/$pkg"
             cd "/tmp/$pkg"
             # -d: runtime deps (greetd, sway, ...) resolve on the target at pacstrap

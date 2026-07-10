@@ -216,7 +216,9 @@ mod tests {
 
     #[test]
     fn missing_root_yields_empty() {
-        let games = HeroicSource::at(vec!["/nonexistent".into()]).scan().unwrap();
+        let games = HeroicSource::at(vec!["/nonexistent".into()])
+            .scan()
+            .unwrap();
         assert!(games.is_empty());
     }
 }
